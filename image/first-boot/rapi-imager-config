@@ -1,0 +1,343 @@
+#!/usr/bin/env python3
+"""Apply the settings Raspberry Pi Imager writes onto the card.
+
+The wizard in the official flashing tool asks for a hostname, an account, SSH
+and a wireless network, and leaves the answers on the FAT partition. Imager 2.x
+does that as `rpi-preseed.toml` (its init_format "rpi-preseed", v2.0.11 and
+later, offered for this image through the manifest scripts/imager-manifest.py
+writes); older tools wrote `custom.toml`. Both carry the same sections, and
+both are read here. Raspberry Pi OS reads them with its own tooling; this image
+is plain Debian, so without this nothing read them and the wizard's questions
+had no effect. A device flashed for a Wi-Fi-only house then came up
+unreachable, which on an appliance with no screen is indistinguishable from a
+broken card.
+
+The parts that are not ours to invent are taken from the format as the tool
+writes it:
+
+    [system]  hostname
+    [user]    name, password (a crypt hash unless password_encrypted = false)
+    [ssh]     enabled, password_authentication, authorized_keys
+    [wlan]    ssid or ssid_hex, password, password_encrypted, hidden, country
+    [locale]  keymap, timezone
+
+Imager writes the [ssh] section only when SSH was switched on in it. Its
+absence is not read as "switch it off": this image ships SSH on, and the panel
+password becomes the SSH one, which is the way in for a card whose wizard
+never got past the Wi-Fi step.
+
+Anything else in the file is ignored rather than refused: the tool adds keys
+over time and an unknown one is not a reason to leave a device off the network.
+
+Runs before NetworkManager, so the wireless network is written as a keyfile
+rather than through nmcli: at that point nothing is listening on the bus yet.
+Each file is removed when it has been applied, because it carries the Wi-Fi
+password and the card is readable in any machine.
+
+Paths come from the environment so the whole thing can be run against a
+throwaway tree in the tests: RAPI_BOOT_DIR for the FAT partition, RAPI_TARGET
+for everything the script writes on the system.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+BOOT = Path(os.environ.get("RAPI_BOOT_DIR", "/boot/firmware"))
+TARGET = Path(os.environ.get("RAPI_TARGET", "/"))
+# The account the image ships with, and the one the panel's service runs as.
+# A wizard that names a different one gets that one created beside it; renaming
+# this one would take the panel unit, the sudoers entry and every path in the
+# image with it.
+PANEL_USER = os.environ.get("RAPI_PANEL_USER", "rapi")
+
+
+def log(message: str) -> None:
+    print(f"imager-config: {message}", flush=True)
+
+
+def at(*parts: str) -> Path:
+    """A path on the target, so the tests can point the whole script at /tmp."""
+    return TARGET.joinpath(*[p.lstrip("/") for p in parts])
+
+
+def write(path: Path, text: str, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    path.chmod(mode)
+
+
+def run(*command: str, stdin: str | None = None) -> bool:
+    try:
+        proc = subprocess.run(command, input=stdin, capture_output=True, text=True,
+                              timeout=120)
+    except (OSError, subprocess.SubprocessError) as err:
+        log(f"{command[0]} could not be run: {err}")
+        return False
+    if proc.returncode != 0:
+        log(f"{' '.join(command)} failed: {(proc.stderr or proc.stdout).strip()[:200]}")
+        return False
+    return True
+
+
+# --- the pieces ---------------------------------------------------------------
+
+
+def set_hostname(name: str) -> None:
+    """The name, and the line in /etc/hosts that makes it resolve here.
+
+    Both, because the panel is reached as <name>.local and avahi publishes the
+    system hostname: a /etc/hostname nobody else agrees with leaves the device
+    answering to a name it does not think it has.
+    """
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
+    if (not name or len(name) > 63 or any(c not in allowed for c in name)
+            or not name[0].isascii() or not name[0].isalnum()):
+        # isalnum() alone is unicode: "ids-zolw" with the Polish letter passed
+        # it, and avahi and hostnamectl then both refuse the name the device
+        # believes it has.
+        log(f"not a hostname: {name!r}")
+        return
+    log(f"hostname {name}")
+    write(at("etc/hostname"), name + "\n")
+    hosts = at("etc/hosts")
+    lines = hosts.read_text(encoding="utf-8").splitlines() if hosts.exists() else []
+    kept = [l for l in lines if not l.split("#")[0].strip().startswith("127.0.1.1")]
+    write(hosts, "\n".join([*kept, f"127.0.1.1\t{name}"]) + "\n")
+    # And on the running system, not only in the file. systemd read
+    # /etc/hostname in PID 1, long before this unit, so without this the whole
+    # first boot keeps the old name: avahi publishes it, and the certificate
+    # issued minutes later by rapi-first-boot carries it in the SAN. That
+    # certificate is issued once, so the panel would warn about a name mismatch
+    # for the life of the card.
+    run("hostname", name)
+
+
+def set_user(user: dict) -> str:
+    """The account the wizard asked for, beside the one the image ships with."""
+    name = str(user.get("name") or "").strip()
+    password = str(user.get("password") or "")
+    if not name or "/" in name or ":" in name:
+        return PANEL_USER
+    if name != PANEL_USER:
+        log(f"creating the account {name} asked for by the wizard")
+        run("useradd", "-m", "-s", "/bin/bash", "-G", "sudo", name)
+    if password:
+        log(f"setting the password for {name}")
+        if user.get("password_encrypted") is False:
+            # Only a hand-written file says this; Imager always writes a hash.
+            # On stdin, where `ps` does not show it, and hashed by chpasswd.
+            applied = run("chpasswd", stdin=f"{name}:{password}\n")
+        else:
+            # -p takes the hash, which is what the wizard wrote: the plain
+            # password never exists on the card and must not start existing here.
+            applied = run("usermod", "-p", password, name)
+        if applied:
+            # So the panel leaves it alone: the password that came with the
+            # card stays the SSH password. See deploy/rapi-login-password.
+            write(at("var/lib/rapi-ssh-login"), f"card {name}\n")
+            # Sudo goes with a password from the card, and only with that: the
+            # panel never sees it and cannot change it. For rapi too, when the
+            # wizard named it; the image itself leaves rapi without sudo.
+            run("usermod", "-aG", "sudo", name)
+    return name
+
+
+def set_ssh(ssh: dict, user: str) -> None:
+    if ssh.get("enabled") is False:
+        log("switching SSH off, as the wizard asked")
+        # Both: openssh-server in trixie can be started by its socket, and a
+        # service disabled on its own leaves port 22 open through it.
+        run("systemctl", "disable", "--now", "ssh.service", "ssh.socket")
+    elif "enabled" in ssh:
+        run("systemctl", "enable", "ssh.service")
+
+    if "password_authentication" in ssh:
+        allowed = "yes" if ssh.get("password_authentication") else "no"
+        log(f"SSH password authentication {allowed}")
+        write(at("etc/ssh/sshd_config.d/99-rapi-imager.conf"),
+              "# Written from the flashing tool's answers on the boot partition.\n"
+              f"PasswordAuthentication {allowed}\n")
+
+    keys = ssh.get("authorized_keys") or []
+    if isinstance(keys, str):
+        keys = [keys]
+    keys = [str(k).strip() for k in keys if str(k).strip()]
+    if keys:
+        log(f"installing {len(keys)} authorized key(s) for {user}")
+        home = at(f"home/{user}") if user != "root" else at("root")
+        ssh_dir = home / ".ssh"
+        ssh_dir.mkdir(parents=True, exist_ok=True)
+        ssh_dir.chmod(0o700)
+        write(ssh_dir / "authorized_keys", "\n".join(keys) + "\n", 0o600)
+        run("chown", "-R", f"{user}:{user}", str(ssh_dir))
+        # Keys and no password from the wizard: whoever prepared the card chose
+        # keys, so the panel must not add a password. A password wins.
+        marker = at("var/lib/rapi-ssh-login")
+        current = marker.read_text(encoding="utf-8") if marker.exists() else ""
+        if not current.startswith("card "):
+            write(marker, f"key {user}\n")
+
+
+def set_wlan(wlan: dict) -> None:
+    """The wireless network, as a NetworkManager keyfile.
+
+    Written rather than added with nmcli because this runs before the daemon:
+    NetworkManager reads this directory when it starts, so the first boot comes
+    up on the network the wizard was told about instead of waiting for a cable.
+    """
+    ssid = str(wlan.get("ssid") or "").strip()
+    raw: bytes | None = None
+    if not ssid and wlan.get("ssid_hex"):
+        # Imager's form for a network name that is not UTF-8: the octets as
+        # hex. NetworkManager takes those as a list of byte values.
+        try:
+            raw = bytes.fromhex(str(wlan["ssid_hex"]))
+        except ValueError:
+            log("ssid_hex is not hex, no wireless network written")
+            return
+        ssid = raw.decode("utf-8", errors="replace")
+    if not ssid:
+        return
+    psk = str(wlan.get("password") or "")
+    hidden = "true" if wlan.get("hidden") else "false"
+    log(f"wireless network {ssid}")
+    security = ""
+    if psk:
+        # The wizard writes the 64 character PSK when it can compute it, and the
+        # passphrase when it cannot. wpa-psk takes either.
+        security = ("\n[wifi-security]\n"
+                    "key-mgmt=wpa-psk\n"
+                    f"psk={psk}\n")
+    keyfile = (
+        "# Written from the flashing tool's answers by rapi-imager-config.\n"
+        "[connection]\n"
+        f"id={ssid}\n"
+        "type=wifi\n"
+        "autoconnect=true\n"
+        "\n[wifi]\n"
+        "mode=infrastructure\n"
+        + (f"ssid={';'.join(str(b) for b in raw)};\n" if raw is not None
+           else f"ssid={ssid}\n") +
+        f"hidden={hidden}\n"
+        + security +
+        "\n[ipv4]\nmethod=auto\n"
+        "\n[ipv6]\nmethod=auto\n"
+    )
+    # The SSID goes inside the file as the connection name, never into the path:
+    # "Home/Guests" would put the keyfile in a subdirectory NetworkManager does
+    # not read, and one starting with ".." outside the directory altogether.
+    safe = "".join(c if (c.isascii() and (c.isalnum() or c in "-_")) else "_"
+                   for c in ssid)[:48] or "wireless"
+    # 0600 and root-owned, or NetworkManager refuses to read it at all.
+    write(at("etc/NetworkManager/system-connections", f"{safe}.nmconnection"),
+          keyfile, 0o600)
+
+    country = str(wlan.get("country") or "").strip().upper()
+    if len(country) == 2 and country.isalpha():
+        log(f"regulatory domain {country}")
+        # Both, because neither is enough on its own: the module option is what
+        # survives a reboot, and it only takes effect the next time cfg80211 is
+        # loaded, which on this boot may already have happened. `iw reg set`
+        # covers exactly that gap, on the one boot where the radio is the only
+        # way in.
+        write(at("etc/modprobe.d/rapi-regdom.conf"),
+              f"options cfg80211 ieee80211_regdom={country}\n")
+        run("iw", "reg", "set", country)
+
+
+def set_locale(locale: dict) -> None:
+    timezone = str(locale.get("timezone") or "").strip()
+    zonefile = at("usr/share/zoneinfo", timezone) if timezone else None
+    if timezone and ".." not in timezone and zonefile and zonefile.exists():
+        log(f"timezone {timezone}")
+        write(at("etc/timezone"), timezone + "\n")
+        link = at("etc/localtime")
+        link.unlink(missing_ok=True)
+        link.symlink_to(zonefile)
+    elif timezone:
+        log(f"no such timezone on this image: {timezone}")
+
+    keymap = str(locale.get("keymap") or "").strip()
+    if keymap and keymap.isalnum():
+        log(f"keyboard layout {keymap}")
+        write(at("etc/default/keyboard"),
+              "# Written from the flashing tool's answers on the boot partition.\n"
+              'XKBMODEL="pc105"\n'
+              f'XKBLAYOUT="{keymap}"\n'
+              'XKBVARIANT=""\n'
+              'XKBOPTIONS=""\n'
+              'BACKSPACE="guess"\n')
+
+
+# --- the whole of it ----------------------------------------------------------
+
+
+# What the flashing tool leaves, newest first. Both are read if both are there:
+# a card prepared twice, by two versions of the tool, still gets every answer.
+SOURCES = ("rpi-preseed.toml", "custom.toml")
+
+
+def apply(source: Path) -> bool:
+    """One file from the wizard: read it, apply it, then wipe it off the card."""
+    name = source.name
+    try:
+        with source.open("rb") as handle:
+            config = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as err:
+        # Left in place: a file this script cannot read is one a person has to
+        # look at, and deleting it would take the evidence with it.
+        log(f"{name} could not be read, leaving it alone: {err}")
+        return False
+
+    if not isinstance(config, dict):
+        log(f"{name} is not a table, leaving it alone")
+        return False
+
+    def section(key: str) -> dict:
+        value = config.get(key)
+        return value if isinstance(value, dict) else {}
+
+    log(f"applying {name}")
+    set_hostname(str(section("system").get("hostname") or "").strip())
+    user = set_user(section("user"))
+    set_ssh(section("ssh"), user)
+    set_wlan(section("wlan"))
+    set_locale(section("locale"))
+
+    # It carries the Wi-Fi password and the account hash, and the card can be
+    # read in any machine. Overwritten before it is unlinked, because FAT hands
+    # deleted blocks back unchanged.
+    try:
+        size = source.stat().st_size
+        with source.open("r+b") as handle:
+            handle.write(b"\0" * size)
+            handle.flush()
+            os.fsync(handle.fileno())
+        source.unlink(missing_ok=True)
+    except OSError as err:
+        # A FAT partition remounted read-only, which is what a tired card looks
+        # like. Saying so beats a traceback on the console of a device whose
+        # only screen is the login banner.
+        log(f"{name} could not be removed from the card: {err}")
+    return True
+
+
+def main() -> int:
+    found = [BOOT / name for name in SOURCES if (BOOT / name).is_file()]
+    if not found:
+        return 0
+    ok = all([apply(source) for source in reversed(found)])
+    log("done, the settings from the wizard are in place")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    if shutil.which("useradd") is None and TARGET == Path("/"):
+        log("this does not look like the device, refusing to run")
+        sys.exit(1)
+    sys.exit(main())

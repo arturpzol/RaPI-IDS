@@ -1,0 +1,325 @@
+<header class="page-head head-row">
+  <div>
+    <h1>Dashboard</h1>
+    <!-- One line. Which figures follow the period and which do not is three
+         sentences of truth that nobody needs on every visit, so they sit on
+         the selector that raises the question. -->
+    <p class="muted">Intrusion detection state and device health.</p>
+  </div>
+
+  <!-- It governs the chart, the map, the lists and the blocked count, so it
+       sits in the header rather than over the chart. What it does not govern -
+       the review queue and the rating tiles - is on the control itself, where
+       the question comes up. -->
+  <select (change)="setWindow($any($event.target).value)" aria-label="Time window"
+          [title]="windowHelp()">
+    @for (opt of windowOptions; track opt.value) {
+      <option [value]="opt.value" [selected]="opt.value === window()">{{ opt.label }}</option>
+    }
+  </select>
+</header>
+
+@if (loadError()) {
+  <div class="card error-card">
+    No contact with the backend: {{ loadError() }}
+  </div>
+}
+
+<!-- The engine reports itself as running whether or not anything is arriving,
+     so a capture interface that is down renders as a quiet night: the alert
+     count simply stops climbing. This sits above the tiles because every figure
+     below it is meaningless while it is showing. -->
+@if (captureProblem(); as problem) {
+  <div class="card layout-note capture-note" [class.bad]="captureState() === 'bad'">
+    <div>
+      <strong>{{ captureHeadline() }}</strong>
+      <p>{{ problem }}</p>
+    </div>
+    <a class="btn" routerLink="/setup">Check the layout</a>
+  </div>
+}
+
+<!-- Shown until somebody has been through the wizard once, and then never
+     again. This is the screen where "nothing is reaching the sensor" and "the
+     network is quiet" look identical, so it is the screen that has to say the
+     question exists. -->
+@if (layoutUnknown()) {
+  <div class="card layout-note">
+    <div>
+      <strong>How is this Pi connected?</strong>
+      <p>
+        Nothing has been recorded yet. The engine can only match rules against
+        traffic that reaches this device, which on a switched network is the
+        traffic of the Pi itself plus broadcasts. If the map below stays empty,
+        this is usually why.
+      </p>
+    </div>
+    <a class="btn btn-primary" routerLink="/setup">Check the layout</a>
+  </div>
+}
+
+<!-- tiles: the number is the whole message, so no chart.
+
+     Two groups, framed apart, because they answer two different questions. On
+     the left, the state of this device: what is waiting for a person, and what
+     the engine stopped. On the right, how sharp today's traffic was, in the
+     rule set's own tiers. In one undivided row the eye read all of them as one
+     scale, and "Blocked" as its sixth step. -->
+<section class="tiles-row">
+  <div class="tile-group group-state">
+  <!-- Two questions, and only one tile is allowed to answer each.
+
+       "Is anything waiting for me" is a queue. It has no window: it climbs
+       when an alert arrives and falls only when somebody clears it, so a
+       number that drops here always means a person did something. That is what
+       the headline of this screen has to be. The windowed count used to hold
+       this place, and a count whose far edge moves with the clock falls
+       through a quiet night on its own - 22 an hour was the measured rate
+       here - which read as the panel losing rows.
+
+       "How loud is it" is a calendar day. It resets at a moment everybody can
+       predict, and yesterday travels beside it because one day's figure alone
+       cannot tell a quiet morning from a dead sensor.
+
+       The link carries since=all so the list opens on the same rows the tile
+       counted. Landing on a 24 h list under an all-time number would be the
+       same fault in a different place. -->
+  <stat-tile label="Needs review"
+             [value]="(summary()?.pending ?? 0) | num"
+             [alarm]="(summary()?.pending ?? 0) > 0"
+             [hint]="pendingHint()"
+             [link]="['/ids']" [linkParams]="{ tab: 'alerts', unacked: 1, since: 'all' }" />
+
+  <!-- Shown whenever it can mean something: while the engine is inline, and on
+       any device where it has stopped something.
+
+       Second, not last. It answers the same question as the tile beside it -
+       what is the state of this device - while the ratings to its right answer
+       how sharp the traffic is. Last in the row it read as a sixth rating, and
+       on a narrow screen it fell into the next line entirely.
+
+       Zero is the point of it in blocking mode. "Blocking is on" and "blocking
+       is doing anything" are different statements, and the first one reads as
+       the second - that is the failure this whole panel keeps meeting. Hidden
+       on a sensor reading a copy, where nothing is ever blocked and a tile
+       stuck at zero is one nobody reads on the day it moves.
+
+       The link opens exactly those rows, each carrying its own badge. -->
+  @if ((summary()?.blocked ?? 0) > 0 || live.blocking()) {
+    <stat-tile label="Blocked" badge="IPS" [tone]="blockedTone()"
+               [value]="(summary()?.blocked ?? 0) | num"
+               [hint]="blockedHint()"
+               [link]="['/ids']"
+               [linkParams]="{ tab: 'alerts', blocked: 1, since: window() }" />
+  }
+
+  </div>
+
+  <!-- How bad, in ET's own tiers, for today against yesterday. This is the
+       half of the strip that says something an operator can act on: a total
+       counts, a rating judges. Colour carries it, so the row reads across a
+       room without being read. -->
+  <div class="tile-group group-rating">
+  @for (tile of ratingTiles(); track tile.tier) {
+    <stat-tile [label]="tile.label" [value]="tile.value"
+               [tone]="tile.tone" [hint]="tile.hint"
+               [link]="['/ids']"
+               [linkParams]="{ tab: 'alerts', since: 'today', severity: tile.tier }" />
+  }
+
+  </div>
+
+  <!-- Capture loss and CPU temperature used to stand here, between the alert
+       tiles. Two subjects in one row, and the row is the first thing anybody
+       reads: "how bad is the network" and "how is the box" are not answered
+       together. They moved into the two cards that already report each of
+       those, and lost nothing on the way. -->
+</section>
+
+<section class="grid cols-2">
+  <!-- one series => no legend, the card title names the data -->
+  <div class="card wide grows">
+    <div class="card-title">
+      <span>Alerts per {{ timelineUnit() }} (last {{ windowLabel() }})</span>
+      <a routerLink="/ids" [queryParams]="{ tab: 'alerts' }" class="dim">all alerts →</a>
+    </div>
+    <!-- The two day totals, under the shape they belong to. On a tile they
+         were a number without a reason; here the chart is the reason. The
+         engine's own events come with them because they are outside every
+         figure on this screen, and a count nobody can open is one nobody can
+         check. -->
+    <div class="day-line">
+      <a routerLink="/ids" [queryParams]="{ tab: 'alerts', since: 'today' }">
+        today <strong>{{ dayTotals().today }}</strong></a>
+      <a routerLink="/ids" [queryParams]="{ tab: 'alerts', since: 'yesterday' }">
+        yesterday <strong>{{ dayTotals().yesterday }}</strong></a>
+      @if (notesToday(); as notes) {
+        <a routerLink="/ids" [queryParams]="{ tab: 'alerts', kind: 'diagnostic' }"
+           title="The engine's own events, outside every count on this screen">
+          {{ notes }} →</a>
+      }
+    </div>
+
+    <line-chart [data]="timeline()" valueUnit="alerts" [legend]="timelineLegend()"
+                [fill]="true"
+                [ariaLabel]="'Number of alerts in consecutive ' + timelineUnit() + 's'" />
+  </div>
+
+  <div class="card wide">
+    <div class="card-title">
+      <span>Where alerts came from ({{ windowLabel() }})</span>
+      <span class="dim">{{ geoCaption() }}</span>
+    </div>
+    <world-map [countries]="geoCountries()" [emptyText]="mapEmptyText()"
+               (selected)="openCountry($event)" />
+    <!-- Traffic with no country is most of the volume on a sensor watching its
+         own segment, so it is stated, not hidden behind an empty map. -->
+    <div class="geo-foot">
+      @for (chip of geoChips(); track chip.code) {
+        <a class="chip" routerLink="/ids"
+           [queryParams]="{ tab: 'alerts', cc: chip.code }">
+          {{ chip.label }}<span class="chip-value">{{ chip.count | num }}</span>
+        </a>
+      }
+    </div>
+  </div>
+
+  <!-- The three answers to "what came in": how bad, what fired, who sent it.
+       They are read against each other, so they stay in one row of their own
+       rather than being scattered by whatever the grid had room for. -->
+  <div class="card-row">
+    <!-- The rating breakdown used to be a rank list here. It is the top strip
+         now, where it answers the first question anybody has, and two places
+         counting ratings over two different periods would have disagreed with
+         each other on every screen: 417 today against 565 in the window. -->
+    <div class="card">
+      <div class="card-title">Top signatures ({{ windowLabel() }})</div>
+      <rank-list [items]="signatureRanks()" />
+    </div>
+
+    <div class="card">
+      <div class="card-title">Busiest sources ({{ windowLabel() }})</div>
+      <rank-list [items]="sourceRanks()" />
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Engine state</div>
+    @if (status(); as st) {
+      <div class="kv">
+        <span class="muted">Service</span>
+        <span class="row">
+          <span class="dot" [class.on]="st.service?.running"
+                [class.off]="st.service && !st.service.running"></span>
+          {{ st.service ? (st.service.running ? 'running' : 'stopped') : 'checking...' }}
+          @if (st.service?.version) { <span class="pill">{{ st.service?.version }}</span> }
+        </span>
+
+        <span class="muted">eve.json reader</span>
+        <span class="row">
+          <span class="dot" [class.on]="st.reader_alive" [class.off]="!st.reader_alive"></span>
+          {{ st.reader_alive ? 'reading' : 'stopped' }}
+        </span>
+
+        <span class="muted">Engine uptime</span>
+        <span>{{ st.engine.uptime_seconds | duration }}</span>
+
+        <span class="muted">Packets / data</span>
+        <span>
+          @if (hasStats()) {
+            {{ st.engine.packets | num }} <span class="dim">({{ bytes(st.engine.bytes) }})</span>
+          } @else { <span class="dim">waiting for counters</span> }
+        </span>
+
+        <span class="muted">Flows</span>
+        <span>
+          @if (hasStats()) { {{ st.engine.flows | num }} }
+          @else { <span class="dim">n/a</span> }
+        </span>
+
+        <span class="muted">Capture loss</span>
+        <span [class.bad]="dropAlarm()">
+          @if (lossMeasured()) {
+            {{ (st.engine.drop_rate_percent ?? 0).toFixed(2) }} %
+          } @else { <span class="dim">n/a</span> }
+          <span class="dim">&nbsp;{{ lossHint() }}</span>
+        </span>
+
+        <span class="muted">Last event</span>
+        <span>{{ st.last_event_at | time }}</span>
+      </div>
+    } @else {
+      <div class="empty">Fetching state...</div>
+    }
+  </div>
+
+  <div class="card">
+    <div class="card-title">Device resources</div>
+    @if (metrics(); as m) {
+      <div class="meters">
+        <ui-meter label="CPU" [percent]="m.cpu.percent"
+                  [detail]="'1 min load: ' + m.cpu.load_avg['1m'].toFixed(2)" />
+        <ui-meter label="Memory" [percent]="m.memory.percent"
+                  [detail]="bytes(m.memory.used) + ' / ' + bytes(m.memory.total)" />
+        <ui-meter label="Disk" [percent]="m.disk.percent"
+                  [detail]="bytes(m.disk.used) + ' / ' + bytes(m.disk.total)" />
+      </div>
+      <div class="kv temp">
+        <span class="muted">Temperature</span>
+        <!-- The unit goes with the figure: "- °C" is not a measurement,
+             and a board with no thermal zone reports nothing at all. -->
+        <span [class.bad]="tempAlarm() || throttleAlarm()">
+          {{ m.cpu.temperature_c ?? '-' }}@if (hasTemperature()) { °C }
+          <span class="dim">{{ tempHint() }}</span>
+        </span>
+      </div>
+      <div class="uptime dim">Device up for {{ m.uptime_seconds | duration }}</div>
+    } @else {
+      <div class="empty">Fetching metrics...</div>
+    }
+  </div>
+
+  <div class="card wide">
+    <div class="card-title">
+      <span>Live alerts</span>
+      <span class="row dim">
+        <span class="dot" [class.on]="live.connected()" [class.off]="!live.connected()"></span>
+        {{ live.streaming() ? 'stream on' : 'paused' }}
+      </span>
+    </div>
+    @if (recentAlerts().length === 0) {
+      <div class="empty">
+        <!-- Not "good news": the list is just as empty with the engine stopped
+             or no traffic arriving. -->
+        <p>No recent alerts. Check that the engine is running and sees traffic
+          before reading that as a quiet network.</p>
+        <!-- Its own line: inline, this wrapped mid-URL into two code boxes. -->
+        <p class="empty-cmd">
+          {{ testHint() }}
+          <code class="nowrap">curl -4 -A 'wget 3.0' http://deb.debian.org/debian/</code>
+        </p>
+      </div>
+    } @else {
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th>Time</th><th>Severity</th><th>Signature</th><th>Source</th><th>Destination</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (a of recentAlerts(); track a.id) {
+              <tr>
+                <td class="nowrap dim">{{ a.ts | time }}</td>
+                <td><span class="badge" [class]="severityCls(a.et_severity)">{{ severityLabel(a.et_severity) }}</span></td>
+                <td>{{ a.signature }}</td>
+                <td class="mono nowrap">{{ a.src_ip }}<span class="dim">:{{ a.src_port }}</span></td>
+                <td class="mono nowrap">{{ a.dest_ip }}<span class="dim">:{{ a.dest_port }}</span></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </div>
+</section>

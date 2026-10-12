@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Print when the signature set was built by the vendor and when it was fetched.
+#
+#   rapi-rules-date
+#   built 1788381900
+#   fetched 1788399068
+#
+# Why this exists: the panel used to date the rule set by the mtime of the
+# merged /var/lib/suricata/rules/suricata.rules. That file is rewritten from the
+# local cache every time a category is switched or a signature is silenced, so
+# a device that had not downloaded rules in a month showed today's date after
+# one click, and looked current while running month old detection.
+#
+# The vendor's own build stamp survives in exactly one place: the mtimes inside
+# the archive suricata-update keeps in its cache. That directory is root only
+# (0750), which is why this runs over sudo instead of being read directly.
+#
+# Read only. No arguments, so the sudoers entry needs no wildcard.
+set -euo pipefail
+
+CACHE="${RAPI_RULES_CACHE:-/var/lib/suricata/update/cache}"
+
+[[ -d "$CACHE" ]] || { echo "no signature cache at $CACHE" >&2; exit 3; }
+
+# Newest by mtime: suricata-update keys the file name by a hash of the source
+# URL, and the URL carries the engine version, so an engine upgrade leaves the
+# archive of the previous one sitting next to the current one.
+ARCHIVE="$(find "$CACHE" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@\t%p\n' \
+           | sort -n | tail -n 1 | cut -f2-)"
+[[ -n "$ARCHIVE" ]] || { echo "no signature archive in $CACHE" >&2; exit 4; }
+
+# The newest stamp among the regular files. Regular files only, because the
+# leading entry is a directory whose mtime is whatever the packer's own
+# filesystem happened to have rather than the build time. Read to the end rather
+# than stopping at the first match: an early exit closes the pipe under tar, and
+# pipefail then reports the vendor's own archive as our failure.
+# The listing is minute resolution and zero padded, so sorting it as text sorts
+# it as time.
+STAMP="$(tar -tvzf "$ARCHIVE" | awk '/^-/ { print $4, $5 }' | sort | tail -n 1)"
+[[ -n "$STAMP" ]] || { echo "no dated entry in $ARCHIVE" >&2; exit 5; }
+
+# tar prints local time and date parses local time, so the round trip holds
+# wherever this runs. Minute resolution is all tar gives and all a date needs.
+printf 'built %s\n' "$(date -d "$STAMP" +%s)"
+printf 'fetched %s\n' "$(stat -c %Y "$ARCHIVE")"

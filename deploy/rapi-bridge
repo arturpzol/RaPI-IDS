@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Put this device into the path of a link, or take it out again.
+#
+#   rapi-bridge <bridge> up <a> <b>
+#   rapi-bridge <bridge> down
+#
+# Installed root-owned and called by the panel over sudo. An inline bridge is
+# the one layout where the panel can take a working network down, so everything
+# here is checked before anything is created, and a half-built bridge is torn
+# down rather than left behind.
+#
+# Built through NetworkManager rather than with `ip link`, because a bridge that
+# disappears on the next reboot is worse than no bridge: the cable stays plugged
+# in and the link is simply dead.
+set -euo pipefail
+
+BR="${1:-}"
+MODE="${2:-}"
+A="${3:-}"
+B="${4:-}"
+
+# Everything the script reads about the machine goes through these two, so the
+# argument checks can be exercised against a fixture tree instead of against the
+# interfaces of whoever is running the tests.
+SYS_NET="${RAPI_SYS_NET:-/sys/class/net}"
+
+die() { echo "$1" >&2; exit 1; }
+
+valid_name() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,15}$ ]]; }
+
+# Offloads that hand merged or reassembled segments to userspace. Same list and
+# the same reason as rapi-capture-iface: rules that measure sizes or offsets
+# would otherwise match against frames the network never carried.
+OFFLOADS=(gro lro tso gso rx-gro-hw rxvlan)
+
+offloads() {  # offloads <interface> off|on
+  local iface="$1" state="$2" feature
+  for feature in "${OFFLOADS[@]}"; do
+    ethtool -K "$iface" "$feature" "$state" >/dev/null 2>&1 || true
+  done
+}
+
+# Whether taking these two ports into the path would leave this device with no
+# way out. Not "does a member carry the default route": a member carrying one
+# is the normal case on a link that runs through this device, and the question
+# that matters is whether anything else still carries one.
+#
+# Measured here, on a live device: switching blocking off hands both ports back
+# to NetworkManager for a moment, one of them picks up a lease with a default
+# route, and the old check then refused to build the bridge. The ports were
+# already released, so the link carried nothing and the panel could not put it
+# back: a check meant to keep the device reachable had taken the network down.
+would_strand_us() {  # would_strand_us <member> <member>
+  local iface members=" $1 $2 " others=0 ours=0
+  while read -r iface; do
+    [[ -z "$iface" ]] && continue
+    if [[ "$members" == *" $iface "* ]]; then ours=1; else others=1; fi
+  done < <(ip -4 route show default 2>/dev/null | awk '{print $5}')
+  (( ours == 1 && others == 0 ))
+}
+
+teardown() {
+  local member
+  if [[ -d "$SYS_NET/$BR/brif" ]]; then
+    for member in $(ls "$SYS_NET/$BR/brif" 2>/dev/null); do
+      ip link set "$member" promisc off 2>/dev/null || true
+      offloads "$member" on
+      nmcli connection delete "$BR-$member" >/dev/null 2>&1 || true
+    done
+  fi
+  nmcli connection delete "$BR-$A" >/dev/null 2>&1 || true
+  nmcli connection delete "$BR-$B" >/dev/null 2>&1 || true
+  nmcli connection delete "$BR" >/dev/null 2>&1 || true
+}
+
+valid_name "$BR" || die "not a usable bridge name: $BR"
+
+case "$MODE" in
+  up)
+    valid_name "$A" || die "not an interface name: $A"
+    valid_name "$B" || die "not an interface name: $B"
+    [[ "$A" != "$B" ]] || die "a bridge needs two different interfaces"
+    [[ -e "$SYS_NET/$A" ]] || die "no such interface: $A"
+    [[ -e "$SYS_NET/$B" ]] || die "no such interface: $B"
+    if [[ -e "$SYS_NET/$BR" ]]; then
+        # Re-applying the same layout is a normal thing to do (the wizard can be
+        # walked through twice), and tearing a working bridge down to build the
+        # same one again would be an outage for no reason.
+        existing="$(ls "$SYS_NET/$BR/brif" 2>/dev/null | sort | tr '\n' ' ')"
+        wanted="$(printf '%s\n%s\n' "$A" "$B" | sort | tr '\n' ' ')"
+        [[ "$existing" == "$wanted" ]] \
+            || die "$BR already exists with different members: $existing"
+        echo "ok bridge=$BR members=$A,$B (already up)"
+        exit 0
+    fi
+
+    # The last line of defence before the network changes. The panel checks this
+    # too, from what it detected; this checks the machine as it is right now.
+    if would_strand_us "$A" "$B"; then
+      die "the only default route runs through $A or $B - bridging them would cut this device off"
+    fi
+
+    trap 'teardown' ERR
+
+    # No STP: the bridge has to be invisible to the network it sits in, and two
+    # ports is not a topology that needs a spanning tree. The cost is that
+    # plugging both cables into the same switch makes a loop, which is why the
+    # panel says so before it gets here.
+    nmcli connection add type bridge ifname "$BR" con-name "$BR" \
+      stp no ipv4.method disabled ipv6.method disabled >/dev/null
+
+    # "master" rather than "controller": the newer spelling is not in every
+    # NetworkManager the image may end up running on, the old one still works in
+    # all of them.
+    for member in "$A" "$B"; do
+      nmcli connection add type ethernet ifname "$member" con-name "$BR-$member" \
+        master "$BR" >/dev/null
+    done
+
+    nmcli connection up "$BR" >/dev/null
+    for member in "$A" "$B"; do
+      nmcli connection up "$BR-$member" >/dev/null
+      ip link set "$member" up
+      ip link set "$member" promisc on
+      offloads "$member" off
+    done
+    ip link set "$BR" promisc on
+
+    trap - ERR
+    echo "ok bridge=$BR members=$A,$B"
+    ;;
+
+  down)
+    teardown
+    echo "ok bridge=$BR removed"
+    ;;
+
+  *)
+    die "usage: $0 <bridge> up <a> <b> | $0 <bridge> down"
+    ;;
+esac

@@ -1,0 +1,115 @@
+@if (loading() && !data()) {
+  <div class="card empty">Checking where the logs go...</div>
+}
+
+@if (data(); as s) {
+  <section class="card current">
+    <div class="card-title">Where the engine writes its logs</div>
+    <div class="path mono">{{ s.log_dir }}</div>
+
+    <div class="current-meta">
+      <span>Taking up <strong>{{ totalSize() | bytes }}</strong> in {{ s.files.length }} files</span>
+      <span class="dim">&middot;</span>
+      <span>Free on this volume: <strong>{{ s.disk.free | bytes }}</strong> of {{ s.disk.total | bytes }}</span>
+    </div>
+
+    @if (s.files.length) {
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>File</th><th class="right">Size</th></tr></thead>
+          <tbody>
+            @for (f of s.files; track f.name) {
+              <tr>
+                <td class="mono">{{ f.name }}</td>
+                <td class="right">{{ f.size_bytes | bytes }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </section>
+
+  @for (warning of s.warnings; track warning) {
+    <div class="card warn-card">{{ warning }}</div>
+  }
+
+  <section class="card">
+    @if (!s.on_root) {
+      <!-- Already off the boot volume. The question this screen exists to ask
+           has been answered, so it says so instead of offering the same move
+           again in different words. -->
+      <div class="card-title">Storage</div>
+      <p class="dim intro">
+        The logs are on a different filesystem from the system. That spares the
+        boot card only if that filesystem is on another disk, such as a USB SSD:
+        a second partition of the same card still takes every write. Events are
+        the most frequent writes in the whole device, and a card has a finite
+        number of them.
+      </p>
+    } @else {
+      <div class="card-title">Move the logs off the boot card</div>
+      <p class="dim intro">
+        Events are the most frequent writes in the whole device, and they are
+        landing on the card it boots from. Moving them onto a disk extends the
+        card's life and leaves room for more history.
+      </p>
+    }
+
+    @if (s.candidates.length) {
+      <div class="volumes">
+        @for (v of s.candidates; track v.path) {
+          <div class="volume" [class.is-current]="v.current">
+            <div class="volume-head">
+              <span class="mono">{{ v.mount }}</span>
+              <span class="dim">{{ v.device }} &middot; {{ v.fstype }}</span>
+            </div>
+            <div class="dim">
+              {{ v.free | bytes }} free of {{ v.total | bytes }}
+              @if (!v.persistent) {
+                <!-- The one failure worth naming: after a reboot the mount point
+                     is an ordinary directory on the card again, and the engine
+                     keeps writing to it without a word. -->
+                <span class="warn-inline">
+                  not in /etc/fstab, so it will not come back after a reboot
+                </span>
+              }
+            </div>
+            @if (v.current) {
+              <span class="dim">logs are here</span>
+            } @else {
+              <button class="btn btn-sm" (click)="moveTo(v.path)"
+                      [disabled]="busy() || !s.can_change" [attr.aria-busy]="(busy()) || null">
+                {{ busy() ? 'Switching...' : 'Move logs here' }}
+              </button>
+            }
+          </div>
+        }
+      </div>
+    } @else {
+      <p class="empty">
+        No other volume is mounted. Attach a disk and mount it. The panel does
+        not mount anything itself, because a bad fstab entry can stop the system
+        from booting.
+      </p>
+    }
+
+    <details class="advanced">
+      <summary>Choose the directory myself</summary>
+      <div class="set-dir">
+        <input type="text" class="mono" placeholder="/mnt/ssd/suricata"
+               aria-label="Log directory"
+               [value]="path()" (input)="path.set($any($event.target).value)"
+               [disabled]="busy() || !s.can_change" />
+        <button class="btn btn-sm" (click)="save()"
+                [disabled]="unchanged() || busy() || !s.can_change" [attr.aria-busy]="(busy()) || null">
+          {{ busy() ? 'Switching...' : 'Save and restart the engine' }}
+        </button>
+      </div>
+    </details>
+  </section>
+}
+
+@if (message(); as msg) {
+  <div class="card" [class.error-card]="!msg.ok" [class.ok-card]="msg.ok">{{ msg.text }}</div>
+}

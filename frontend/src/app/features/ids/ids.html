@@ -1,0 +1,461 @@
+<header class="page-head">
+  <div class="row-wrap">
+    <h1>Intrusion detection</h1>
+    @if (status(); as st) {
+      <span class="row">
+        <span class="dot" [class.on]="st.service?.running"
+              [class.off]="st.service && !st.service.running"></span>
+        <span class="dim">{{ st.service ? (st.service.running ? 'running' : 'stopped') : 'checking...' }}</span>
+        @if (st.service?.version) { <span class="pill">{{ st.service?.version }}</span> }
+      </span>
+    }
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab" [class.active]="tab() === 'alerts'" (click)="setTab('alerts')">
+    Alerts
+    @if (page(); as p) {
+      <span class="tab-count" [title]="alertCountHint()">{{ p.total | num }}</span>
+    }
+  </button>
+  <button class="tab" [class.active]="tab() === 'protection'" (click)="setTab('protection')">
+    Protection
+  </button>
+  <button class="tab" [class.active]="tab() === 'live'" (click)="setTab('live')">
+    Live traffic
+    <span class="dot" [class.on]="live.connected()" [class.off]="!live.connected()"></span>
+  </button>
+  <button class="tab" [class.active]="tab() === 'rules'" (click)="setTab('rules')">
+    Engine
+  </button>
+  <button class="tab" [class.active]="tab() === 'logs'" (click)="setTab('logs')">
+    Logs
+  </button>
+  <button class="tab" [class.active]="tab() === 'notify'" (click)="setTab('notify')">
+    Notifications
+  </button>
+</nav>
+
+<!-- ================= PROTECTION ================= -->
+@if (tab() === 'protection') {
+  <app-protection [running]="!!status()?.service?.running"
+                  (changed)="onProtectionChanged()" />
+}
+
+<!-- ================= LOGS ================= -->
+@if (tab() === 'logs') {
+  <app-logs (changed)="onProtectionChanged()" />
+}
+
+<!-- ================= NOTIFICATIONS ================= -->
+@if (tab() === 'notify') {
+  <app-notify />
+}
+
+<!-- ================= ALERTS ================= -->
+@if (tab() === 'alerts') {
+  <section class="filters">
+    <input type="search" placeholder="Search: signature, category, IP..."
+           [value]="search()" (input)="onSearchInput($any($event.target).value)"
+           class="search-input" />
+
+    <!-- [selected] on the option, not [value] on the select: the select is
+         bound before @for has produced its options, so a window arriving in the
+         URL set the filter but left the box reading "All time". -->
+    <select (change)="setWindow($any($event.target).value)" aria-label="Time window">
+      @for (opt of windowOptions; track opt.value) {
+        <option [value]="opt.value" [selected]="opt.value === window()">{{ opt.label }}</option>
+      }
+    </select>
+
+    <!-- Same reason as the window above, found the same way: a rating arriving
+         from a dashboard tile filtered the list and left this box reading "Any
+         rating", so the screen showed a subset and denied filtering it. -->
+    <select (change)="setSeverity($any($event.target).value)" aria-label="Severity">
+      @for (opt of severityOptions; track opt.value) {
+        <option [value]="opt.value"
+                [selected]="opt.value === (severity() ?? '')">{{ opt.label }}</option>
+      }
+    </select>
+
+    <!-- Which kind of row, as a control rather than a link at the bottom of
+         the page. It has three states and a closed set of them, exactly like
+         the rating beside it, and a filter you can only switch on by scrolling
+         past the whole list is one nobody finds. -->
+    <select (change)="chooseKind($any($event.target).value)" aria-label="Alert kind">
+      @for (opt of kindOptions; track opt.value) {
+        <option [value]="opt.value" [selected]="opt.value === kind()">{{ opt.label }}</option>
+      }
+    </select>
+
+    <!-- The two narrowings, in one shape. "blocked only" used to be a pill you
+         could remove but never add, which made the toolbar a list of what
+         somebody else had already decided.
+
+         Shown on a sensor that never blocks anything too: a tile asserts
+         something and is hidden when it would assert nothing, a control only
+         offers a question. The answer "none" is a true answer. -->
+    <div class="checks">
+      <label class="check">
+        <input type="checkbox" [checked]="onlyUnacked()" (change)="toggleUnacked()" />
+        unacknowledged only
+      </label>
+
+      <label class="check">
+        <input type="checkbox" [checked]="onlyBlocked()"
+               (change)="setBlocked($any($event.target).checked)" />
+        blocked only
+      </label>
+    </div>
+
+    <!-- A value carried in from the map, not one of a closed set, so it stays a
+         pill: something to remove rather than something to choose. -->
+    @if (country(); as cc) {
+      <button class="filter-pill" (click)="clearCountry()"
+              [title]="'Remove the ' + countryLabel(cc) + ' filter'">
+        source: {{ countryLabel(cc) }} <span class="pill-x" aria-hidden="true">x</span>
+      </button>
+    }
+
+    <div class="spacer"></div>
+
+    <!-- Actions, kept together and away from the filters. "Mark all reviewed"
+         still sits by the rows it clears rather than on the dashboard: clearing
+         twelve thousand rows from a screen that shows none of them is an action
+         taken blind. -->
+    <button class="btn btn-sm" (click)="ackAll()" [disabled]="ackingAll()"
+            title="Mark every stored alert as reviewed, clearing the queue" [attr.aria-busy]="(ackingAll()) || null">
+      {{ ackingAll() ? 'Marking...' : 'Mark all reviewed' }}
+    </button>
+    <button class="btn btn-sm" (click)="resetFilters()">Clear</button>
+    <button class="btn btn-sm" (click)="loadAlerts()" [disabled]="loading()" [attr.aria-busy]="(loading()) || null">
+      {{ loading() ? 'Loading...' : 'Refresh' }}
+    </button>
+  </section>
+
+  @if (error()) {
+    <div class="card error-card">{{ error() }}</div>
+  }
+
+  <div class="split" [class.with-detail]="selected()">
+    <div class="card list-card">
+      @if (page(); as p) {
+        @if (p.items.length === 0) {
+          <div class="empty">
+            No alerts match these filters.
+            <!-- Every filter, not four of them. With only "blocked only" set on
+                 a sensor that blocks nothing, this said no rows matched and
+                 offered no way out of the filter that was hiding them. -->
+            @if (anyFilter()) {
+              <br /><button class="btn btn-sm" (click)="resetFilters()">Show all</button>
+            }
+          </div>
+        } @else {
+          <div class="table-wrap">
+            <table class="data">
+              <thead>
+                <tr>
+                  <th>Time</th><th>Severity</th><th>Signature</th>
+                  <th>Source</th><th>Destination</th><th>Proto</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (a of p.items; track a.id) {
+                  <tr class="clickable" [class.selected]="selectedId() === a.id"
+                      [class.acked]="a.acknowledged" (click)="select(a)">
+                    <td class="nowrap dim">{{ a.ts | time }}</td>
+                    <td>
+                      <span class="badge" [class]="severityCls(a.et_severity)">
+                        {{ severityLabel(a.et_severity) }}
+                      </span>
+                    </td>
+                    <td class="sig">
+                      <!-- The one thing an operator running an IPS opens this
+                           screen to see. Every alert carries the verdict and
+                           nothing read it, so the list showed which rules
+                           matched and never which of them stopped anything. -->
+                      @if (a.action === 'blocked') {
+                        <span class="badge blocked" title="The engine stopped this packet">blocked</span>
+                      }
+                      {{ a.signature }}
+                    </td>
+                    <td class="mono nowrap">
+                      <a href="#" (click)="filterByIp(a.src_ip, $event)">{{ a.src_ip }}</a>
+                      <span class="dim">:{{ a.src_port }}</span>
+                    </td>
+                    <td class="mono nowrap">
+                      <a href="#" (click)="filterByIp(a.dest_ip, $event)">{{ a.dest_ip }}</a>
+                      <span class="dim">:{{ a.dest_port }}</span>
+                    </td>
+                    <td class="dim nowrap">{{ a.proto }}{{ a.app_proto ? '/' + a.app_proto : '' }}</td>
+                    <td>
+                      <button class="btn btn-sm ack-btn" (click)="ack(a, $event)"
+                              [title]="a.acknowledged ? 'Mark as not reviewed' : 'Mark as reviewed'">
+                        {{ a.acknowledged ? '✓' : '○' }}
+                      </button>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+
+          <div class="pager">
+            <button class="btn btn-sm" (click)="prevPage()" [disabled]="offset() === 0">← Previous</button>
+            <span class="dim">page {{ currentPage() }} of {{ pageCount() }}
+              ({{ p.total | num }}
+               {{ kind() === 'diagnostic' ? 'notes' : kind() === 'all' ? 'rows' : 'alerts' }})</span>
+            <button class="btn btn-sm" (click)="nextPage()"
+                    [disabled]="offset() + p.limit >= p.total">Next →</button>
+          </div>
+        }
+
+        <!-- What the reader is looking at, in one sentence. The buttons that
+             used to live here moved into the toolbar, where every other filter
+             is; the words stayed, because "engine notes" names a thing nobody
+             is born knowing. -->
+        <div class="list-foot">
+          <span class="dim">{{ kindNote() }}</span>
+        </div>
+      } @else {
+        <div class="empty">Loading alerts...</div>
+      }
+    </div>
+
+    <!-- detail panel -->
+    @if (selected(); as a) {
+      <aside class="card detail-card">
+        <div class="card-title">
+          <span>Alert #{{ a.id }} details</span>
+          <button class="btn btn-sm" (click)="closeDetail()">✕</button>
+        </div>
+
+        <div class="detail-sig">
+          <span class="badge" [class]="severityCls(a.et_severity)">{{ severityLabel(a.et_severity) }}</span>
+          <strong>{{ a.signature }}</strong>
+        </div>
+
+        <div class="kv">
+          <span class="muted">Time</span>         <span>{{ a.ts | datetime }}</span>
+          <span class="muted">Category</span>     <span>{{ a.category || '-' }}</span>
+          <span class="muted">SID</span>          <span class="mono">{{ a.signature_id }}</span>
+          <span class="muted">Source</span>       <span class="mono">{{ a.src_ip }}:{{ a.src_port }}</span>
+          <span class="muted">Destination</span>  <span class="mono">{{ a.dest_ip }}:{{ a.dest_port }}</span>
+          <span class="muted">Protocol</span>     <span>{{ a.proto }}{{ a.app_proto ? ' / ' + a.app_proto : '' }}</span>
+          <span class="muted">Interface</span>    <span>{{ a.iface || '-' }}</span>
+          <span class="muted">Reviewed</span>
+          <span>
+            <button class="btn btn-sm" (click)="ack(a, $event)">
+              {{ a.acknowledged ? '✓ yes (undo)' : '○ no (mark)' }}
+            </button>
+          </span>
+        </div>
+
+        @if (selectedFacts().length) {
+          <div class="kv facts">
+            @for (fact of selectedFacts(); track fact.label) {
+              <span class="muted">{{ fact.label }}</span>
+              <span class="mono">{{ fact.value }}</span>
+            }
+          </div>
+        }
+
+        @if (a.signature_id) {
+          <div class="mute-row" [class.is-muted]="isMuted(a)">
+            @if (isMuted(a)) {
+              <span class="pill pill-muted">Silenced</span>
+              <button class="btn btn-sm" (click)="unmuteSignature(a)"
+                      [disabled]="muting() !== null" [attr.aria-busy]="(muting() === a.signature_id) || null">
+                {{ muting() === a.signature_id ? 'Rebuilding rules...' : 'Alert on it again' }}
+              </button>
+              <!-- Says what the button does, not what the pill means: standing
+                   after it, "out of the rule set" read as the outcome of
+                   pressing it, which is the opposite of the truth. -->
+              <span class="dim">puts it back in the rule set</span>
+            } @else {
+              <button class="btn btn-sm" (click)="muteSignature(a)"
+                      [disabled]="muting() !== null" [attr.aria-busy]="(muting() === a.signature_id) || null">
+                {{ muting() === a.signature_id ? 'Rebuilding rules...' : 'Stop alerting on this signature' }}
+              </button>
+              <span class="dim">removed from the rule set, undo here or on Protection</span>
+            }
+          </div>
+
+          <!-- Not offered for a silenced signature: it is out of the rule set,
+               so there is nothing left to block or to allow. -->
+          @if (!isMuted(a)) {
+            <div class="mute-row" [class.is-muted]="isAllowed(a)">
+              @if (isAllowed(a)) {
+                <span class="pill pill-muted">Never blocked</span>
+                <button class="btn btn-sm" (click)="unallowSignature(a)"
+                        [disabled]="muting() !== null" [attr.aria-busy]="(muting() === a.signature_id) || null">
+                  {{ muting() === a.signature_id ? 'Rebuilding rules...' : 'Block it again' }}
+                </button>
+                <!-- What the button does, for the same reason as the row
+                     above: standing after it, a description of the state
+                     reads as the outcome of pressing it. -->
+                <span class="dim">lets the engine drop it again</span>
+              } @else {
+                <button class="btn btn-sm" (click)="allowSignature(a)"
+                        [disabled]="muting() !== null" [attr.aria-busy]="(muting() === a.signature_id) || null">
+                  {{ muting() === a.signature_id ? 'Rebuilding rules...' : 'Alert but never block' }}
+                </button>
+                <span class="dim">keeps alerting, undo here or on Protection</span>
+              }
+            </div>
+          }
+        }
+
+        @if (actionResult(); as res) {
+          <pre class="action-out" [class.err]="!res.ok">{{ res.text }}</pre>
+        }
+
+        <div class="card-title raw-head">
+          <span>Raw EVE event</span>
+          <button class="btn btn-sm" (click)="rawExpanded.set(!rawExpanded())">
+            {{ rawExpanded() ? 'Collapse' : 'Expand' }}
+          </button>
+        </div>
+        <pre class="raw" [class.collapsed]="!rawExpanded()">{{ rawJson(a) }}</pre>
+      </aside>
+    }
+  </div>
+}
+
+<!-- ================= LIVE TRAFFIC ================= -->
+@if (tab() === 'live') {
+  <section class="filters">
+    <select [value]="eventFilter()" (change)="eventFilter.set($any($event.target).value)">
+      <option value="">All types</option>
+      @for (t of eventTypes(); track t) {
+        <option [value]="t">{{ t }}</option>
+      }
+    </select>
+
+    <label class="check">
+      <input type="checkbox" [checked]="live.streaming()" (change)="live.toggleStreaming()" />
+      stream on
+    </label>
+
+    <div class="spacer"></div>
+    <span class="dim">{{ filteredEvents().length }} events buffered</span>
+  </section>
+
+  <div class="hint card">
+    Events other than alerts (DNS, TLS, HTTP, flows) are not written to the
+    database, so you only see them as they happen. That keeps thousands of writes
+    a minute off the SD card.
+  </div>
+
+  <div class="card">
+    @if (filteredEvents().length === 0) {
+      <div class="empty">
+        @if (!live.connected()) { No connection to the stream. Check that the backend is running. }
+        @else if (!live.streaming()) { Stream paused. }
+        @else { Waiting for network traffic... }
+      </div>
+    } @else {
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr><th>Time</th><th>Type</th><th>Source</th><th>Destination</th><th>Details</th></tr>
+          </thead>
+          <tbody>
+            @for (e of filteredEvents(); track $index) {
+              <tr>
+                <td class="nowrap dim">{{ e.ts | time }}</td>
+                <td><span class="pill">{{ e.event_type }}</span></td>
+                <td class="mono nowrap">{{ e.src_ip }}<span class="dim">:{{ e.src_port }}</span></td>
+                <td class="mono nowrap">{{ e.dest_ip }}<span class="dim">:{{ e.dest_port }}</span></td>
+                <td class="detail-col">{{ e.detail || '' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </div>
+}
+
+<!-- ================= ENGINE ================= -->
+@if (tab() === 'rules') {
+  <section class="tiles">
+    <stat-tile label="EVE lines processed"
+               [value]="(status()?.lines_read ?? 0) | num"
+               [hint]="(status()?.parse_errors ?? 0) + ' parse errors'" />
+    <!-- The engine counts every alert it raised, threats and its own notes
+         together, so the list it leads to has to show both. Without the link
+         the number looked unreachable: the alert list defaults to threats, and
+         on this sensor that is 52 of 888. -->
+    <!-- Shown as a pair with what the panel stored, because on its own the
+         number invites a comparison with the alert count beside it, and that
+         one counts threats only, in the selected window, with the filters
+         applied. Three differences at once and nothing on screen said so. -->
+    <stat-tile label="Alerts detected (engine)"
+               [value]="(status()?.engine?.alerts_detected ?? 0) | num"
+               [hint]="engineAlertsHint()" [alarm]="engineAlertsBad()"
+               [acts]="true" (activate)="showEverything()" />
+    <!-- The threshold is the backend's, not a second copy of it here: two
+         numbers meaning the same thing are two numbers that drift apart. -->
+    <!-- "n/a" rather than 0.00: in NFQUEUE mode there is no ring to overflow and
+         the engine publishes no kernel_drops, and a zero read off the absent
+         section is a measurement the panel never made. -->
+    <stat-tile label="Dropped packets"
+               [value]="status()?.engine?.loss_measured
+                          ? (status()!.engine.drop_rate_percent ?? 0).toFixed(2) : 'n/a'"
+               [unit]="status()?.engine?.loss_measured ? '%' : ''"
+               [alarm]="status()?.engine?.sensor_problem === 'drops'"
+               [hint]="lossHint()" />
+  </section>
+
+  <div class="grid cols-2">
+    <div class="card">
+      <div class="card-title">Engine control</div>
+      <div class="row-wrap">
+        <button class="btn btn-primary" (click)="serviceAction('reload')"
+                [disabled]="actionBusy() !== null" [attr.aria-busy]="(actionBusy() === 'reload') || null">
+          {{ actionBusy() === 'reload' ? 'Reloading...' : 'Reload rules' }}
+        </button>
+      </div>
+
+      @if (actionResult(); as res) {
+        <pre class="action-out" [class.err]="!res.ok">{{ res.text }}</pre>
+      }
+    </div>
+
+    <!-- The sensor, read off the engine's own stats record.
+         This card used to derive the same answer from the engine's decoder
+         event rules, which fire per packet: five "protocol detection skipped"
+         in a week turned it red on a machine that had dropped nothing at all
+         out of 13.7 million packets. Zeek treats capture loss over 1 % as the
+         line, Security Onion colours its per-node loss on the same scale, and
+         Suricata publishes the counters without being asked. -->
+    <div class="card">
+      <div class="card-title">Sensor</div>
+      <!-- The same dot as the live stream indicator on the tab bar: on a screen
+           of numbers a verdict has to be readable without being read. -->
+      <div class="health-line" [class.bad]="sensorBad()">
+        <span class="dot"
+              [class.on]="!sensorBad() && !sensorUnknown()"
+              [class.warn]="sensorUnknown()"
+              [class.off]="sensorBad()"></span>
+        {{ sensorLine() }}
+      </div>
+      <div class="dim note">{{ sensorDetail() }}</div>
+    </div>
+
+    <div class="card wide">
+      <div class="card-title">
+        <span>Engine log</span>
+        <button class="btn btn-sm" (click)="loadEngineLog()">Fetch log tail</button>
+      </div>
+      @if (engineLog(); as lines) {
+        <pre class="raw log">{{ lines.join('\n') }}</pre>
+      } @else {
+        <div class="empty">The last 200 lines of suricata.log: what the engine said when it
+          started and when the rules were last reloaded.</div>
+      }
+    </div>
+  </div>
+}

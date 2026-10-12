@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Listen on an interface for a few seconds and say whether foreign traffic arrives.
+
+    rapi-capture-probe <interface> <seconds>
+
+Installed root-owned and called by the panel over sudo, because opening a raw
+socket needs a privilege the panel does not have and should not be given.
+
+The number this exists to produce is `foreign_unicast`: frames whose destination
+address is neither this machine's nor a broadcast or multicast group. On a
+switched network those frames only arrive if something is deliberately sending a
+copy of somebody else's conversation - a mirror port or a tap. Zero of them,
+after a switch has supposedly been configured to mirror, is the difference
+between a sensor that works and one that has been quietly watching itself. No
+amount of reading the configuration back can establish that; only listening can.
+
+Counts and addresses only. Payloads are never read, never stored and never
+returned: the panel has no business handing packet contents to a browser, and a
+tool that could would be worth stealing.
+"""
+from __future__ import annotations
+
+import json
+import socket
+import struct
+import sys
+import time
+from collections import Counter
+from pathlib import Path
+
+# From linux/if_packet.h. Adding promiscuous membership through the socket means
+# the kernel drops it when the socket closes, so the probe cannot leave the
+# interface in a state it did not find it in.
+SOL_PACKET = 263
+PACKET_ADD_MEMBERSHIP = 1
+PACKET_MR_PROMISC = 1
+
+ETH_P_ALL = 0x0003
+ETH_P_IP = 0x0800
+ETH_P_IPV6 = 0x86DD
+ETH_P_ARP = 0x0806
+ETH_P_VLAN = 0x8100
+
+BROADCAST = b"\xff" * 6
+MAX_SECONDS = 30
+# Enough to name who is talking without turning the result into a dump.
+TOP_N = 8
+
+
+def fail(message: str) -> None:
+    print(json.dumps({"ok": False, "error": message}))
+    sys.exit(1)
+
+
+def own_mac(iface: str) -> bytes:
+    text = Path(f"/sys/class/net/{iface}/address").read_text().strip()
+    return bytes.fromhex(text.replace(":", ""))
+
+
+def is_multicast(address: bytes) -> bool:
+    # The low bit of the first octet is the group bit; broadcast has it too.
+    return bool(address[0] & 1)
+
+
+def parse(frame: bytes) -> tuple[bytes, bytes, int, str | None, str | None]:
+    """(destination, source, ethertype, source ip, destination ip)."""
+    dst, src = frame[0:6], frame[6:12]
+    ethertype = struct.unpack("!H", frame[12:14])[0]
+    offset = 14
+    if ethertype == ETH_P_VLAN and len(frame) >= 18:
+        ethertype = struct.unpack("!H", frame[16:18])[0]
+        offset = 18
+
+    src_ip = dst_ip = None
+    if ethertype == ETH_P_IP and len(frame) >= offset + 20:
+        src_ip = socket.inet_ntop(socket.AF_INET, frame[offset + 12:offset + 16])
+        dst_ip = socket.inet_ntop(socket.AF_INET, frame[offset + 16:offset + 20])
+    elif ethertype == ETH_P_IPV6 and len(frame) >= offset + 40:
+        src_ip = socket.inet_ntop(socket.AF_INET6, frame[offset + 8:offset + 24])
+        dst_ip = socket.inet_ntop(socket.AF_INET6, frame[offset + 24:offset + 40])
+    return dst, src, ethertype, src_ip, dst_ip
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        fail("usage: rapi-capture-probe <interface> <seconds>")
+    iface = sys.argv[1]
+    try:
+        seconds = int(sys.argv[2])
+    except ValueError:
+        fail("seconds must be a whole number")
+    if not 1 <= seconds <= MAX_SECONDS:
+        fail(f"seconds must be between 1 and {MAX_SECONDS}")
+    if not Path(f"/sys/class/net/{iface}").exists():
+        fail(f"no such interface: {iface}")
+
+    try:
+        mine = own_mac(iface)
+    except OSError as err:
+        fail(f"cannot read the address of {iface}: {err}")
+
+    try:
+        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
+        sock.bind((iface, 0))
+    except OSError as err:
+        fail(f"cannot listen on {iface}: {err}")
+
+    index = socket.if_nametoindex(iface)
+    mreq = struct.pack("IHH8s", index, PACKET_MR_PROMISC, 0, b"")
+    try:
+        sock.setsockopt(SOL_PACKET, PACKET_ADD_MEMBERSHIP, mreq)
+    except OSError:
+        # Not fatal: the engine may already have the interface in promiscuous
+        # mode, and if nothing does, that shows up as a result rather than as a
+        # crash.
+        pass
+
+    totals = Counter()
+    talkers: Counter[str] = Counter()
+    peers: set[bytes] = set()
+    bytes_seen = 0
+
+    sock.settimeout(0.5)
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            frame = sock.recv(2048)
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+        if len(frame) < 14:
+            continue
+
+        dst, src, ethertype, src_ip, _ = parse(frame)
+        bytes_seen += len(frame)
+        totals["frames"] += 1
+
+        if dst == BROADCAST:
+            totals["broadcast"] += 1
+        elif is_multicast(dst):
+            totals["multicast"] += 1
+        elif dst == mine or src == mine:
+            totals["own"] += 1
+        else:
+            # The whole point of the exercise.
+            totals["foreign_unicast"] += 1
+            if len(peers) < 4096:
+                peers.add(src)
+            if src_ip:
+                talkers[src_ip] += 1
+
+        if ethertype == ETH_P_ARP:
+            totals["arp"] += 1
+
+    sock.close()
+
+    print(json.dumps({
+        "ok": True,
+        "interface": iface,
+        "seconds": seconds,
+        "frames": totals["frames"],
+        "bytes": bytes_seen,
+        "own": totals["own"],
+        "broadcast": totals["broadcast"],
+        "multicast": totals["multicast"],
+        "arp": totals["arp"],
+        "foreign_unicast": totals["foreign_unicast"],
+        "foreign_sources": len(peers),
+        "top_talkers": [{"address": ip, "frames": n} for ip, n in talkers.most_common(TOP_N)],
+    }))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Write the console banner: where the panel is, and on which address.
+#
+#   rapi-issue
+#
+# An appliance with no screen output beyond "rapi-ids login:" tells the person
+# who just powered it up nothing at all. They do not have an account on it -
+# there is none - and the one thing they need is the URL to open, which depends
+# on an address the device only learns at boot. So the login screen is where it
+# has to be said.
+#
+# Written to /etc/issue, which agetty prints above every login prompt, on every
+# console the device has - the HDMI one, the serial one on the debug UART, and
+# any getty started later. `agetty --reload` makes the instances that are
+# already sitting at a prompt redraw it, so a lease that arrives after the
+# prompt was drawn still reaches the screen.
+#
+# Deliberately not the panel's own state: this runs before the panel is
+# necessarily up, on a device whose whole problem might be that the panel is
+# not up. Everything here comes from the kernel and from configuration files.
+#
+# `set -e` is safe here only because the whole banner is built into a temporary
+# file and moved into place at the end: an abort half way leaves the previous
+# banner on screen rather than a truncated one.
+set -euo pipefail
+
+SYS_NET="${RAPI_SYS_NET:-/sys/class/net}"
+ISSUE="${RAPI_ISSUE:-/etc/issue}"
+CAPTURE_YAML="${RAPI_CAPTURE_YAML:-/etc/suricata/rapi-capture.yaml}"
+
+HOSTNAME_SHORT="$(hostname -s 2>/dev/null || echo rapi-ids)"
+
+# The interface the engine listens on carries no address on purpose, so it must
+# not be offered as a way in. Read from the file the panel writes rather than
+# guessed, and empty is a fine answer on a device nobody has set up yet.
+capture_iface() {
+  # The `|| true` is load-bearing. Under `set -o pipefail` a grep that matches
+  # nothing fails the whole pipeline, the command substitution fails with it,
+  # and `set -e` takes the script down - on a fresh image, which has no capture
+  # interface yet and is exactly when the banner matters most. It failed on
+  # every NetworkManager event for a whole boot and the login screen kept the
+  # placeholder.
+  sed -n 's/^[[:space:]]*-[[:space:]]*interface:[[:space:]]*\([^[:space:]]*\).*/\1/p' \
+    "$CAPTURE_YAML" 2>/dev/null | grep -v '^default$' | head -1 || true
+}
+
+# "iface address/prefix" per line, IPv4 only. The banner exists to be typed into
+# a browser and an IPv6 address is not that.
+addresses() {
+  ip -4 -brief addr show scope global 2>/dev/null \
+    | awk '$2 == "UP" || $2 == "UNKNOWN" {for (i = 3; i <= NF; i++) print $1, $i}'
+}
+
+CAPTURE="$(capture_iface)"
+
+{
+  printf '\n'
+  printf '  RaPi IDS %*s%s\n\n' 38 '' "$HOSTNAME_SHORT"
+
+  printf '  Panel        https://%s.local/\n' "$HOSTNAME_SHORT"
+  found=0
+  while read -r iface addr; do
+    [[ -z "${iface:-}" || "$iface" == "$CAPTURE" ]] && continue
+    printf '               https://%s/\n' "${addr%%/*}"
+    found=1
+  done < <(addresses)
+  if [[ $found -eq 0 ]]; then
+    printf '               no address yet - the network has not answered\n'
+  fi
+  printf '               It asks for its own account the first time it is opened.\n\n'
+
+  if [[ -n "$CAPTURE" ]]; then
+    if [[ "$(cat "$SYS_NET/$CAPTURE/carrier" 2>/dev/null)" == "1" ]]; then
+      printf '  Watching     %-8s no address, by design\n' "$CAPTURE"
+    else
+      printf '  Watching     %-8s NO CABLE - nothing is reaching the engine\n' "$CAPTURE"
+    fi
+  else
+    printf '  Watching     nothing yet - choose a layout in the panel\n'
+  fi
+
+  while read -r iface addr; do
+    [[ -z "${iface:-}" || "$iface" == "$CAPTURE" ]] && continue
+    printf '  Reachable    %-8s %s\n' "$iface" "$addr"
+  done < <(addresses)
+
+  printf '  Engine       %s\n\n' "$(systemctl is-active suricata 2>/dev/null || echo unknown)"
+
+  printf '  The certificate is signed by this device alone. Its rapi-ca.crt is on\n'
+  printf '  the first partition of the card, readable from any machine.\n'
+  printf '  Log in here only to fix the network. Everything else is in the panel.\n\n'
+} > "$ISSUE.new"
+
+mv "$ISSUE.new" "$ISSUE"
+chmod 0644 "$ISSUE"
+
+# Redraw the prompts that are already on screen. Without this the banner is a
+# boot ago and shows "no address yet" on a device that has one.
+agetty --reload 2>/dev/null || true

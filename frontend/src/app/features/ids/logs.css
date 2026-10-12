@@ -1,0 +1,85 @@
+:host { display: block; }
+
+.card + .card { margin-top: 1rem; }
+
+.current .path {
+  font-size: 1.05rem;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.current-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0.9rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.intro {
+  margin: -0.3rem 0 0.9rem;
+  max-width: 70ch;
+  font-size: 0.82rem;
+}
+
+.warn-card { border-color: var(--warn); color: var(--warn); }
+.ok-card { border-color: var(--border-strong); }
+.error-card { border-color: var(--danger); color: var(--danger); }
+
+.set-dir {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.set-dir input { flex: 1; min-width: 220px; }
+
+/* --- the volumes on offer ---
+   A row per mounted volume, because on most devices there is exactly one and a
+   list of one should not look like a table. */
+.volumes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.volume {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  font-size: var(--fs-sm);
+}
+
+.volume .btn { align-self: flex-start; }
+
+/* The volume already in use is stated, not offered. */
+.volume.is-current { border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+
+.volume-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.warn-inline {
+  color: var(--warn);
+}
+
+/* The free-text path. Kept, but out of the way: it answers a question almost
+   nobody has, and having it first made the common case look complicated. */
+.advanced { margin-top: 0.5rem; }
+
+.advanced > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.advanced > summary:hover { color: var(--text); }
+.advanced .set-dir { margin-top: 0.7rem; }

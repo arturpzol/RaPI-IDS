@@ -1,0 +1,213 @@
+<header class="page-head">
+  <h1>System</h1>
+  @if (info(); as i) {
+    <p class="muted">{{ i.model }} &middot; {{ i.hostname }} &middot; kernel {{ i.kernel }}</p>
+  }
+</header>
+
+@if (error()) {
+  <div class="card error-card">{{ error() }}</div>
+}
+
+<!-- power/temperature warnings: text, not colour alone -->
+@if (throttleWarnings().length > 0) {
+  <div class="card warn-card">
+    <strong>Hardware warning</strong>
+    <ul>
+      @for (w of throttleWarnings(); track w) { <li>{{ w }}</li> }
+    </ul>
+  </div>
+}
+
+<section class="tiles">
+  <!-- A board with no thermal zone reports nothing, and `?? 0` described that
+       as a reading of zero degrees in good order. The unit goes with the
+       figure for the same reason: "- °C" is not a measurement. -->
+  <stat-tile label="CPU temperature"
+             [value]="metrics()?.cpu?.temperature_c ?? '-'"
+             [unit]="hasTemperature() ? '°C' : ''"
+             [alarm]="(metrics()?.cpu?.temperature_c ?? 0) >= 75"
+             [hint]="!hasTemperature() ? 'no reading from this board'
+                       : (metrics()!.cpu.temperature_c! >= 75 ? 'hot' : 'normal')" />
+  <stat-tile label="Load (1 min)"
+             [value]="(metrics()?.cpu?.load_avg?.['1m'] ?? 0).toFixed(2)"
+             [hint]="(info()?.cpu_count ?? 0) + ' cores'" />
+  <stat-tile label="Uptime"
+             [value]="(metrics()?.uptime_seconds ?? 0) | duration" />
+  <stat-tile label="Free space"
+             [value]="bytes(metrics()?.disk?.free)"
+             [alarm]="(metrics()?.disk?.percent ?? 0) >= 90"
+             [hint]="'of ' + bytes(metrics()?.disk?.total)" />
+</section>
+
+<section class="grid cols-2">
+  <!-- One window and one card for all three series: the point of having them
+       together is reading a temperature rise off against the load that caused
+       it, and that only works while they share an X axis. -->
+  <div class="card wide">
+    <div class="card-title">
+      <span>Load over time</span>
+      <span class="row">
+        <span class="dim">{{ resolutionLabel() }}</span>
+        @if (detailNote(); as note) {
+          <span class="dim">&middot; {{ note }}</span>
+        }
+        @if (coverageLabel(); as coverage) {
+          <span class="dim">&middot; {{ coverage }}</span>
+        }
+        <select (change)="setHistoryHours($any($event.target).value)"
+                aria-label="Time window">
+          @for (opt of historyOptions; track opt.value) {
+            <option [value]="opt.value" [selected]="opt.value === historyHours()">
+              {{ opt.label }}
+            </option>
+          }
+        </select>
+      </span>
+    </div>
+
+    <div class="series-label">Processor <span class="dim">%</span></div>
+    <line-chart [data]="cpuChart()" valueUnit="%"
+                ariaLabel="Processor load over time" />
+
+    <div class="series-label">Temperature <span class="dim">&deg;C</span></div>
+    <!-- Fitted axis: this one lives between about 45 and 70, and drawn from
+         zero it is a straight line across the middle of the card. -->
+    <line-chart [data]="tempChart()" valueUnit="&deg;C" [startAtZero]="false"
+                ariaLabel="Processor temperature over time" />
+
+    <div class="series-label">Memory <span class="dim">%</span></div>
+    <!-- This one keeps its zero. It is a share of a known total, so the full
+         scale means something, and fitted to a two-point band the ordinary
+         breathing of the page cache looks like a crisis. A leak still shows:
+         a line that climbs and never comes back down. -->
+    <line-chart [data]="memoryChart()" valueUnit="%"
+                ariaLabel="Memory use over time" />
+  </div>
+
+  <div class="card">
+    <div class="card-title">Resources</div>
+    @if (metrics(); as m) {
+      <div class="meters">
+        <ui-meter label="CPU (total)" [percent]="m.cpu.percent" />
+        @for (core of perCore(); track $index) {
+          <ui-meter [label]="'Core ' + ($index + 1)" [percent]="core" />
+        }
+        <ui-meter label="Memory" [percent]="m.memory.percent"
+                  [detail]="bytes(m.memory.used) + ' / ' + bytes(m.memory.total)" />
+        @if (m.swap.total > 0) {
+          <ui-meter label="Swap" [percent]="m.swap.percent"
+                    [detail]="bytes(m.swap.used) + ' / ' + bytes(m.swap.total)" />
+        }
+        <ui-meter label="Disk /" [percent]="m.disk.percent"
+                  [detail]="bytes(m.disk.used) + ' / ' + bytes(m.disk.total)" />
+      </div>
+    } @else {
+      <div class="empty">Fetching metrics...</div>
+    }
+  </div>
+
+  <div class="card">
+    <div class="card-title">Memory details</div>
+    @if (metrics(); as m) {
+      <div class="kv">
+        <span class="muted">Total</span>      <span>{{ bytes(m.memory.total) }}</span>
+        <span class="muted">Used</span>       <span>{{ bytes(m.memory.used) }}</span>
+        <span class="muted">Available</span>  <span>{{ bytes(m.memory.available) }}</span>
+        <span class="muted">Swap used</span>  <span>{{ bytes(m.swap.used) }}</span>
+        <span class="muted">Load</span>
+        <span>
+          {{ m.cpu.load_avg['1m'].toFixed(2) }} /
+          {{ m.cpu.load_avg['5m'].toFixed(2) }} /
+          {{ m.cpu.load_avg['15m'].toFixed(2) }}
+          <span class="dim">(1/5/15 min)</span>
+        </span>
+      </div>
+    }
+  </div>
+
+  @if (sshHow(); as how) {
+    <div class="card wide ssh-card">
+      <div class="card-title">Remote access</div>
+      <p class="ssh-how">{{ how }}</p>
+      @if (ssh()?.active) {
+        <p class="dim">
+          <code>ssh {{ ssh()?.login ?? 'rapi' }}&#64;{{ info()?.hostname ?? 'rapi-ids' }}.local</code>.
+          To switch it off, from a shell on the device:
+          <code>sudo systemctl disable --now ssh.service ssh.socket</code>
+        </p>
+      } @else {
+        <p class="dim">
+          To switch it on, from a shell on the device:
+          <code>sudo systemctl enable --now ssh.service</code>
+        </p>
+      }
+    </div>
+  }
+
+  <div class="card wide">
+    <div class="card-title">
+      <span>Network interfaces</span>
+      <!-- The table says which interface the engine listens on and whether that
+           interface can actually hand it anything. Which one it *should* be is
+           a different question and has its own screen. -->
+      <a class="btn btn-sm" routerLink="/setup">How this Pi is connected</a>
+    </div>
+    @if (interfaces().length === 0) {
+      <div class="empty">Loading...</div>
+    } @else {
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th>Interface</th><th>State</th><th class="right">Link</th>
+              <th>IPv4 addresses</th><th>MAC</th>
+              <th class="right">Received</th><th class="right">Sent</th>
+              <th class="right">Errors</th><th class="right">Dropped</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (i of interfaces(); track i.name) {
+              <tr>
+                <td class="mono">
+                  <strong>{{ i.name }}</strong>
+                  @if (captureRole(i.name); as role) {
+                    <!-- The badge answers "which one is listening" at a glance;
+                         the warning beside it answers "and is it working", which
+                         is the question a name alone cannot. -->
+                    <span class="tag" [class.tag-warn]="role.warn"
+                          [title]="role.warn
+                            ? 'The engine captures on this interface, but ' + role.warn
+                            : 'The engine captures on this interface'">
+                      {{ role.label }}{{ role.warn ? ': ' + role.warn : '' }}
+                    </span>
+                  }
+                </td>
+                <td>
+                  <span class="row">
+                    <span class="dot" [class.on]="i.is_up" [class.off]="!i.is_up"></span>
+                    {{ i.is_up ? 'up' : 'down' }}
+                  </span>
+                </td>
+                <!-- What the wire negotiated. A capture port that came up at
+                     a tenth of its speed looks exactly like a quiet network. -->
+                <td class="right mono" [class.bad]="slowLink(i)"
+                    [title]="slowLink(i)
+                      ? 'The engine captures here and the wire negotiated below a gigabit'
+                      : ''">{{ linkSpeed(i.speed_mbps) }}</td>
+                <td class="mono">{{ i.ipv4.join(', ') || '-' }}</td>
+                <td class="mono dim">{{ i.mac || '-' }}</td>
+                <td class="right">{{ bytes(i.bytes_recv) }}</td>
+                <td class="right">{{ bytes(i.bytes_sent) }}</td>
+                <td class="right" [class.bad]="i.errors_in + i.errors_out > 0">
+                  {{ (i.errors_in + i.errors_out) | num }}
+                </td>
+                <td class="right" [class.bad]="i.drops_in > 0">{{ i.drops_in | num }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </div>
+</section>

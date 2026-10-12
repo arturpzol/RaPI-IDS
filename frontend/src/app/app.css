@@ -1,0 +1,240 @@
+/* The shell fills the viewport and does not scroll; the content column does.
+   The sidebar therefore always spans the full height, and navigation - plus
+   signing out at its foot - stays reachable however long the view is. */
+.shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* --- sidebar --- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 236px;
+  height: 100%;
+  overflow-y: auto;
+  /* Recessed rather than raised: the sidebar is the frame, the content is the
+     subject. A darker, flatter surface pushes it behind the page. */
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 1.05rem 1.15rem;
+}
+
+.brand-icon {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  padding: 5px;
+  border-radius: var(--radius);
+  background: linear-gradient(160deg, var(--accent-dim), transparent 70%);
+  box-shadow: var(--edge);
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The mark: a filled shield with the pulse cut out of it in the colour of the
+   sidebar behind, so it reads as a hole in both themes. Filled rather than
+   outlined, so it stands apart from the outline icons of the menu below. */
+.brand-icon .brand-shield { fill: var(--accent); stroke: none; }
+.brand-icon .brand-pulse { stroke: var(--bg-sunken); stroke-width: 1.9; }
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+.brand-text strong {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.brand-text span { font-size: var(--fs-xs); font-family: var(--mono); }
+
+nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0.35rem 0.6rem;
+}
+
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.nav-item:hover { background: var(--bg-elevated); color: var(--text); }
+
+/* The active item is a raised chip, not a tinted row - it should look like the
+   one thing lifted out of the list. */
+.nav-item.active {
+  background: linear-gradient(180deg, var(--bg-raised), var(--bg-elevated));
+  box-shadow: var(--shadow-sm), var(--edge);
+  color: var(--text);
+}
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -0.6rem;
+  top: 50%;
+  width: 3px;
+  height: 17px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+  transform: translateY(-50%);
+}
+.nav-item.active svg { stroke: var(--accent); }
+
+.nav-item svg {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke var(--t-fast) var(--ease);
+}
+
+.nav-badge {
+  margin-left: auto;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-full);
+  background: var(--danger);
+  box-shadow: 0 0 12px -2px color-mix(in srgb, var(--danger) 65%, transparent);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
+  margin-top: auto;
+  padding: 0.9rem 1.15rem;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-xs);
+}
+
+/* --- content area --- */
+
+.content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;   /* lets content shrink instead of stretching the layout */
+  overflow-y: auto;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  /* Translucent so content scrolling underneath stays faintly visible - the bar
+     reads as glass over the page rather than a separate opaque strip. */
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: saturate(1.6) blur(12px);
+  -webkit-backdrop-filter: saturate(1.6) blur(12px);
+}
+
+.stream-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.25rem 0.6rem 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  box-shadow: var(--edge);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.stream-state.down { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+.stream-state.idle { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+/* Blocking is neither a fault nor business as usual: the device is destroying
+   packets on purpose, and the operator should be able to see that from any
+   screen without going to look for it. */
+.stream-state.blocking { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+
+.menu-btn { display: none; }
+
+.page {
+  flex: 1;
+  /* A cap still exists, because a table row a metre wide has the eye travelling
+     further than the data is worth. It used to be 1560px, which on a 2560px
+     monitor left roughly 380px of empty background down each side and made the
+     dashboard look boxed in. Past this width the grid answers by adding a fourth
+     column rather than by stretching cards. */
+  max-width: 2100px;
+  width: 100%;
+  margin-inline: auto;
+  padding: 1.35rem 1.25rem 2.5rem;
+  min-width: 0;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  animation: fade 0.2s var(--ease);
+}
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* --- phone / tablet --- */
+
+@media (max-width: 820px) {
+  .sidebar {
+    position: fixed;
+    z-index: 50;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform var(--t-base) var(--ease);
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .menu-btn { display: inline-flex; }
+  .page { padding: 1rem 0.85rem 2rem; }
+}
+
+.signed-in {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.signed-in .btn-icon { padding: 0.25rem; }
+.signed-in svg { width: 14px; height: 14px; }

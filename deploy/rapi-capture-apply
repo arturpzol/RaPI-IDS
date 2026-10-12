@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# Point the detection engine at a capture interface, with the home networks it
+# should treat as inside. Installed root-owned and called by the panel over sudo.
+#
+#   rapi-capture-apply <interface> <home-net> [peer-interface]
+#
+# With a peer the engine is configured inline instead of passive: the two
+# interfaces become a pair, the engine reads from each and writes to the other,
+# and a packet a rule drops is simply never written. That is Suricata's own
+# af-packet IPS mode, and it is the only layout in this panel where a `drop`
+# rule stops anything. No kernel bridge is involved: the forwarding belongs to
+# the engine, so while it is down the link carries nothing.
+#
+# The panel supplies two strings and nothing else. Everything written into the
+# engine configuration is generated here, so a compromised panel cannot use this
+# to inject YAML of its own choosing - the same reasoning as rapi-logrotate-dir.
+#
+# Why a second override file instead of the existing rapi-overrides.yaml: that
+# one is rewritten in full every time the log directory changes in the GUI, which
+# would silently drop an af-packet block living next to it. One file, one owner.
+#
+# HOME_NET goes in an override too, and an earlier version of this script said
+# it could not. That was half right. An include does replace a whole top-level
+# key, so writing only HOME_NET under "vars" takes EXTERNAL_NET, HTTP_SERVERS
+# and every port group down with it - measured, not assumed:
+#
+#   $ suricata --dump-config -c base.yaml | grep ^vars
+#   vars.address-groups.HOME_NET = [10.9.9.0/24]      # and nothing else left
+#
+# The answer is to write the whole key. The variables are read back out of the
+# running configuration first, so whatever the package ships is carried over
+# rather than transcribed here and left to drift. What this buys is that
+# suricata.yaml stops being edited in place: the only line this script adds to
+# it is an include, and everything with our name on it lives in files we own
+# outright.
+set -euo pipefail
+
+YAML="${RAPI_SURICATA_YAML:-/etc/suricata/suricata.yaml}"
+CAPTURE="${RAPI_SURICATA_CAPTURE:-/etc/suricata/rapi-capture.yaml}"
+VARS="${RAPI_SURICATA_VARS:-/etc/suricata/rapi-home-net.yaml}"
+HOME_NET_STATE="${RAPI_HOME_NET_STATE:-/etc/suricata/rapi-home-net}"
+INCLUDE_HELPER="${RAPI_INCLUDE_BIN:-/usr/local/sbin/rapi-include}"
+BACKUP="${YAML}.rapi-capture-bak"
+# The two generated files need backups of their own. An earlier version rolled
+# back by deleting them, which is only right the first time this ever runs. On
+# every later run they already hold a working configuration, the restored
+# suricata.yaml still includes them, and deleting them left the engine unable
+# to start - a failed apply took detection down instead of leaving it alone.
+CAPTURE_BAK="${CAPTURE}.rapi-bak"
+VARS_BAK="${VARS}.rapi-bak"
+
+die() { echo "$1" >&2; exit 1; }
+
+# Put back whatever was there before, including "nothing was there".
+restore() {
+  # The backup of suricata.yaml was taken before the include list was rebuilt,
+  # so it already names exactly the files this puts back. Nothing else to do.
+  cp "$BACKUP" "$YAML"
+  if [[ -f "$CAPTURE_BAK" ]]; then mv "$CAPTURE_BAK" "$CAPTURE"; else rm -f "$CAPTURE"; fi
+  if [[ -f "$VARS_BAK" ]]; then mv "$VARS_BAK" "$VARS"; else rm -f "$VARS"; fi
+  rm -f "${CAPTURE}.new" "${VARS}.new"
+}
+
+[[ $# -eq 2 || $# -eq 3 ]] || die "usage: $0 <interface> <home-net> [peer]"
+IFACE="$1"
+HOME_NET="$2"
+PEER="${3:-}"
+
+# --- validation -------------------------------------------------------------
+
+# The interface has to exist. That also rules out anything with a slash, a space
+# or a shell metacharacter in it, because no such interface is in /sys.
+[[ "$IFACE" =~ ^[A-Za-z0-9._-]{1,15}$ ]] || die "not an interface name: $IFACE"
+# One exception, and only one: the panel's own bridge. rapi-inline writes and
+# verifies the engine configuration before it touches the link, so the bridge
+# that configuration names does not exist yet at this point, by design. The
+# engine accepts that (suricata -T with a missing af-packet interface passes).
+# This check did not, and the swap back to detection was refused every time.
+# Found by booting the image, not by a test: each helper had been tested with
+# the other one replaced by a stub.
+if [[ "$IFACE" != "br-rapi" ]]; then
+  [[ -e "/sys/class/net/$IFACE" ]] || die "no such interface: $IFACE"
+fi
+
+if [[ -n "$PEER" ]]; then
+  [[ "$PEER" =~ ^[A-Za-z0-9._-]{1,15}$ ]] || die "not an interface name: $PEER"
+  [[ -e "/sys/class/net/$PEER" ]] || die "no such interface: $PEER"
+  # The engine would accept it and forward every packet it read straight back
+  # out of the port it came from, which is a loop this script can see coming.
+  [[ "$PEER" != "$IFACE" ]] || die "the two inline interfaces have to differ"
+fi
+
+# Addresses, prefixes, commas and the surrounding brackets. Deliberately narrow:
+# this string is written into suricata.yaml, so nothing that could end the quoted
+# scalar or start a new key may pass.
+[[ "$HOME_NET" =~ ^\[[0-9a-fA-F:.,/]+\]$ ]] || die "not a network list: $HOME_NET"
+
+[[ -f "$YAML" ]] || die "cannot find $YAML"
+
+# --- capture configuration --------------------------------------------------
+
+cp "$YAML" "$BACKUP"
+if [[ -f "$CAPTURE" ]]; then cp "$CAPTURE" "$CAPTURE_BAK"; else rm -f "$CAPTURE_BAK"; fi
+if [[ -f "$VARS" ]]; then cp "$VARS" "$VARS_BAK"; else rm -f "$VARS_BAK"; fi
+
+# Replacing the whole af-packet key is safe in a way that replacing app-layer or
+# vars is not: it is a list of interfaces, so a complete replacement is a
+# complete answer.
+#
+# The values are the packaged ones with the interface swapped, plus promisc and
+# ring-size. An earlier version also added use-mmap and tpacket-v3, which are
+# not in the packaged configuration; with them the engine's automatic checksum
+# detection stopped recognising the checksums this machine's own card computes
+# after capture, and it logged an "invalid checksum" alert for nearly every
+# packet the Pi sent. Those two stay out.
+#
+# ring-size is the one addition that earned its place, and it is a different
+# kind of setting: it changes how much the kernel may buffer, not how the
+# packets are read. Left at the default the ring is derived from
+# max-pending-packets divided by the number of threads, which on a four core
+# board is 256 packets per worker. A mirror port hands over bursts at line rate
+# whatever the average looks like, and 256 packets is three milliseconds of
+# gigabit: measured here, 40 packets per second on average was still losing
+# 13 % of them, and the losses are invisible in every counter a person reads.
+# A dropped packet is not inspected at all, so the alert inside it never
+# happens and nothing anywhere says so.
+if [[ -n "$PEER" ]]; then
+  # Inline: the pair, each writing to the other.
+  #
+  # defrag is off on purpose and the engine's own documentation says so. A
+  # reassembled datagram cannot be forwarded as the fragments that arrived, so
+  # defragmenting here would change what the other side receives.
+  #
+  # Separate cluster ids, because two interfaces sharing one would put both
+  # directions of the same link into one load balancing group.
+  #
+  # No ring-size: inline, the engine is the only thing that can forward, so a
+  # ring big enough to hide a burst only turns loss into latency. The default
+  # is what the upstream example uses.
+  cat > "${CAPTURE}.new" <<EOF
+%YAML 1.1
+---
+# Generated by RaPi IDS Panel ($(date -Is)) - do not edit by hand.
+# Inline pair: the engine forwards between these two interfaces and drops what
+# the rules tell it to. While the engine is down, nothing crosses this link.
+af-packet:
+  - interface: $IFACE
+    cluster-id: 98
+    cluster-type: cluster_flow
+    defrag: no
+    promisc: yes
+    copy-mode: ips
+    copy-iface: $PEER
+  - interface: $PEER
+    cluster-id: 97
+    cluster-type: cluster_flow
+    defrag: no
+    promisc: yes
+    copy-mode: ips
+    copy-iface: $IFACE
+  # Kept because replacing the key removes everything else under it.
+  - interface: default
+    cluster-type: cluster_flow
+    defrag: yes
+
+# Inline, both directions of a conversation carry the same tag, so the default
+# is right here and this is set for the same reason the passive block sets it:
+# one file writes the whole key, so it has to say what it wants either way.
+vlan:
+  use-for-tracking: yes
+EOF
+else
+cat > "${CAPTURE}.new" <<EOF
+%YAML 1.1
+---
+# Generated by RaPi IDS Panel ($(date -Is)) - do not edit by hand.
+# Rewritten in full whenever the capture interface changes in the panel.
+af-packet:
+  - interface: $IFACE
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    # A mirror port delivers frames addressed to other machines, and without
+    # this the kernel would hand up only the ones addressed to us.
+    promisc: yes
+    # Per thread, in packets. See the note above the heredoc: the default is
+    # about 256 here, which a single burst empties. Roughly 16 MB of locked
+    # memory per worker, which even the smallest board this image targets has.
+    ring-size: 8192
+  # Kept because replacing the key removes everything else under it, and this
+  # entry is what the engine falls back on for an interface it was not given
+  # settings for.
+  - interface: default
+    cluster-type: cluster_flow
+    defrag: yes
+
+# Whole key, one child, so an include replaces it completely - the same
+# reasoning as af-packet above.
+#
+# The engine hashes the VLAN id into the flow key by default. That is right for
+# a sensor sitting inline, where both directions of a conversation carry the
+# same tag. It is wrong for a mirror port, and wrongly in a way nothing reports:
+# a switch that mirrors a trunk port and an access port into the same
+# destination hands over one direction tagged and the other untagged, the two
+# hash into different flows, and every conversation on the wire arrives as two
+# unidirectional halves.
+#
+# What that costs is not obvious from any counter. No TCP handshake ever
+# completes in the engine's view, so no stream is ever tracked, so no app-layer
+# parser starts: measured here, 12000 TCP flows produced zero tls and zero http
+# transactions, and every rule that matches on what a server sends back was
+# dead. The visible symptom is a trickle of STREAM "invalid ack" alerts, which
+# reads as a network problem rather than a configuration one.
+#
+# Merging by five-tuple can in principle join two conversations that reuse the
+# same addresses and ports in different VLANs at the same moment. On the
+# networks this image is for that costs nothing worth having, and it is the only
+# setting under which a mirror port sees both directions at all.
+vlan:
+  use-for-tracking: no
+EOF
+fi
+mv "${CAPTURE}.new" "$CAPTURE"
+chmod 0644 "$CAPTURE"
+
+
+# --- home networks ----------------------------------------------------------
+
+# Read the variables the engine is using now and write them all back with
+# HOME_NET swapped. First run picks up the packaged values, every run after
+# that reads its own output, so this is idempotent.
+CURRENT="$(suricata --dump-config -c "$YAML" 2>/dev/null || true)"
+if ! grep -q '^vars\.address-groups\.' <<<"$CURRENT"; then
+  restore
+  die "could not read the current variables from $YAML - nothing was changed"
+fi
+
+# A value with a quote in it would end the scalar this writes it into. Nothing
+# the engine ships looks like that, so this is a refusal rather than an escape.
+if grep -E '^vars\.[a-z-]+\.[A-Za-z0-9_]+ = .*"' <<<"$CURRENT" >/dev/null; then
+  restore
+  die "a configuration variable contains a quote - refusing to rewrite them"
+fi
+
+{
+  echo '%YAML 1.1'
+  echo '---'
+  echo "# Generated by RaPi IDS Panel ($(date -Is)) - do not edit by hand."
+  echo '# The whole vars key, because an include replaces a whole key. Written'
+  echo '# from what the engine reported, so packaged values are carried over.'
+  echo 'vars:'
+  for group in address-groups port-groups; do
+    echo "  $group:"
+    awk -v prefix="vars.$group." -v home="$HOME_NET" '
+      index($1, prefix) == 1 {
+        name = substr($1, length(prefix) + 1)
+        # "vars.address-groups = (null)" has no name and is not a variable.
+        if (name == "") next
+        value = substr($0, index($0, " = ") + 3)
+        if (name == "HOME_NET") value = home
+        printf "    %s: \"%s\"\n", name, value
+      }
+    ' <<<"$CURRENT"
+  done
+} > "${VARS}.new"
+mv "${VARS}.new" "$VARS"
+chmod 0644 "$VARS"
+
+# One list for every generated file, rebuilt from what exists. Separate
+# `include:` lines at the same level are deprecated - the engine says so on
+# every start - and there are four of these files now.
+"$INCLUDE_HELPER"
+
+
+# --- verify, or put everything back ----------------------------------------
+
+if ! OUTPUT="$(suricata -T -c "$YAML" 2>&1)"; then
+  restore
+  echo "$OUTPUT" >&2
+  die "the engine rejected this configuration - rolled back"
+fi
+
+rm -f "$CAPTURE_BAK" "$VARS_BAK"
+printf '%s\n' "$HOME_NET" > "$HOME_NET_STATE"
+if [[ -n "$PEER" ]]; then
+  echo "ok inline=$IFACE,$PEER home_net=$HOME_NET"
+else
+  echo "ok interface=$IFACE home_net=$HOME_NET"
+fi

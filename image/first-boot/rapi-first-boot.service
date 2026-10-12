@@ -1,0 +1,22 @@
+[Unit]
+Description=RaPi IDS first boot (filesystem, host keys, certificate, HOME_NET)
+# HOME_NET is read from the addresses this machine has, so the network has to be
+# up before it runs. The panel waits for this unit rather than racing it: without
+# a certificate it would fall back to plain HTTP on the first boot only, which is
+# exactly when the password is set.
+After=network-online.target suricata.service
+Wants=network-online.target
+# Before ssh as well: the image ships without host keys on purpose, and sshd
+# refuses to start without them. It survived on Restart= alone in testing, which
+# is not something to rely on for the only way into a device.
+Before=rapi-panel.service ssh.service
+ConditionPathExists=!/var/lib/rapi-panel/.first-boot-done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rapi-first-boot
+RemainAfterExit=yes
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,284 @@
+/* --- tabs --- */
+
+/* Six tabs need about 550px and a phone has 390. They used to run straight off
+   the edge: the last two were unreachable and the page scrolled sideways, which
+   is what made this screen look broken on a phone. Scrolling the bar keeps it
+   one line and every tab reachable; wrapping six of them would build a
+   three-row header on the narrowest screens, which is worse. */
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+/* The bar is one line high; a scrollbar under it would take a third of that. */
+.tabs::-webkit-scrollbar { display: none; }
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.9rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+  /* Without these the flex row squeezes the tabs instead of scrolling, and
+     "Live traffic" breaks across two lines inside a one-line bar. */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.tab-count {
+  padding: 0.02rem 0.35rem;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- filters --- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+}
+
+.search-input { min-width: 260px; flex: 0 1 340px; }
+
+/* The two narrowings travel together. Left as separate flex items they broke
+   across a line at 1280px, which put one shape at the end of one row and its
+   twin at the start of the next, reading as two unrelated controls. */
+.checks { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.check input { accent-color: var(--accent); }
+
+/* --- list + detail pane --- */
+
+.split { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+.split.with-detail { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
+
+.list-card { padding: 0.5rem 0.5rem 0.75rem; min-width: 0; }
+.split.with-detail table.data td.sig { max-width: 300px; }
+
+/* The cap keeps a long signature from shoving the other columns off screen.
+   It was a flat 320px, so the text was cut short even when half the table was
+   empty; the detail pane is what actually takes the room away, so the narrow
+   cap belongs to that state alone. */
+table.data td.sig {
+  max-width: 620px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* acknowledged alerts fade back but stay readable */
+tr.acked td { opacity: 0.55; }
+
+.ack-btn {
+  padding: 0.1rem 0.4rem;
+  border-color: var(--border);
+  font-size: 0.8rem;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  padding: 0.7rem 0.5rem 0.2rem;
+  font-size: 0.8rem;
+}
+
+.detail-card { align-self: start; position: sticky; top: 0.5rem; min-width: 0; }
+
+.detail-sig {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.4rem 0.9rem;
+  align-items: center;
+  font-size: 0.84rem;
+}
+.kv > span:nth-child(odd) { font-size: 0.78rem; }
+.kv .mono { word-break: break-all; }
+
+/* What the engine saw, under the addresses it saw it between. The rule above
+   separates the two: the block above is the same for every alert, this one
+   changes with the protocol. */
+.facts {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.raw-head { margin-top: 1.1rem; }
+
+.raw {
+  margin: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.raw.collapsed { max-height: 170px; }
+.raw.log { max-height: 380px; white-space: pre; word-break: normal; }
+
+/* --- podglad na zywo --- */
+
+.hint {
+  margin-bottom: 0.9rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+td.detail-col {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- rules --- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.cols-2 { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+/* Cards in one row end at the same line. The cards paired here hold comparable
+   things (engine control next to the rule files), so the alternative is a row
+   with ragged bottoms. */
+.grid.cols-2 { align-items: stretch; }
+.wide { grid-column: 1 / -1; }
+
+.action-out {
+  margin: 0.8rem 0 0;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.action-out.err { border-left-color: var(--danger); color: var(--danger); }
+
+.error-card { margin-bottom: 1rem; border-color: var(--danger); color: var(--danger); }
+
+@media (max-width: 1000px) {
+  .split.with-detail { grid-template-columns: 1fr; }
+  .detail-card { position: static; }
+}
+
+.mute-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.9rem 0 0.2rem;
+}
+.mute-row .dim { font-size: 0.75rem; }
+
+.pill-muted {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+/* Active filter arriving from somewhere else (the dashboard map), shown so it
+   is obvious why the list is short - and removable in one click. */
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.24rem 0.6rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.filter-pill:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.pill-x { color: var(--text-muted); font-weight: 600; }
+
+/* The sensor verdict: one line, red only when the engine's own counters say
+   so. No toggle, because there is nothing folded away behind it. */
+.health-line {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  padding: .35rem 0 .1rem;
+  font-size: .95rem;
+}
+/* The dot sits on the text baseline rather than in the middle of a tall line. */
+.health-line .dot { flex: none; position: relative; top: -.15rem; }
+.health-line.bad { color: var(--danger); font-weight: 600; }
+
+/* One sentence naming what the list is showing, under it. */
+.list-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .6rem;
+  padding: .6rem 0 .1rem;
+  border-top: 1px solid var(--border);
+  font-size: .85rem;
+}
+
+.note { margin: .25rem 0 0; max-width: 62ch; }
+
+/* The verdict on a row. Not a severity - a severity says how bad the rule
+   thinks it is, this says what the engine did about it. */
+.badge.blocked {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  color: var(--warn);
+  margin-right: .4rem;
+}

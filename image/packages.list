@@ -1,0 +1,101 @@
+# Packages that go into the appliance image.
+#
+# The rule: a package is on this list only if something on the device actually
+# runs it. No editors, no compilers, no Node, no Chromium, no desktop, no
+# documentation. Everything comes from Debian trixie, trixie-backports or
+# archive.raspberrypi.com - the same three sources the project already uses.
+#
+# Format: one package per line, "#" starts a comment. A "/suite" suffix pins
+# that package to a suite the way apt does.
+
+# --- boot: Raspberry Pi 5 ---------------------------------------------------
+# Debian's own trixie kernel does not bring up a Pi 5 (raspi.debian.net says Pi 5
+# needs Debian 14), so the kernel and the GPU firmware come from the Raspberry Pi
+# archive - which is Debian trixie with a working kernel, not a different distro.
+linux-image-rpi-2712
+raspi-firmware
+# vcgencmd, and nothing else from raspi-utils: the panel reads throttling and
+# under-voltage from it, and no other source reports those.
+raspi-utils-core
+# No RTC on the board. Without this the clock starts at the epoch on every boot,
+# which makes a fresh TLS certificate "not valid yet" and dates every alert 1970.
+fake-hwclock
+
+# --- system -----------------------------------------------------------------
+# The build starts from minbase (essential + apt + the "required" priority), so
+# everything above that is named here. What is missing is missing on purpose:
+# no cron (nothing is scheduled), no ifupdown (NetworkManager does the work),
+# no editor, no pager, no whiptail.
+systemd-sysv
+# Module loading. Not part of minbase, and without it the kernel gets no
+# drivers loaded from userspace at all.
+kmod
+# The one diagnostic tool kept on purpose: "can this box reach the gateway" is
+# the first question at every site, and the answer decides whether the problem
+# is the panel or the network.
+iputils-ping
+systemd-timesyncd
+# Keys for the three archives, so the device can still update itself.
+debian-archive-keyring
+raspberrypi-archive-keyring
+sudo
+ca-certificates
+openssl
+# The panel is reached at <hostname>.local. Without mDNS the operator is left
+# hunting for a DHCP address.
+avahi-daemon
+libnss-mdns
+openssh-server
+# eve.json grows by megabytes an hour; the panel writes logrotate entries for it.
+logrotate
+# The capture helper takes a mirror port off DHCP through NetworkManager and
+# switches the merging offloads off with ethtool.
+network-manager
+# The wireless half of it, all four needed before a card written with the
+# flashing tool's Wi-Fi answer can join anything: the build installs no
+# Recommends, and wpasupplicant is only recommended by network-manager. The
+# firmware is the radio of the Pi itself; without it the interface does not
+# exist, and the wizard's answer has nowhere to go. The database and iw are
+# what keep the radio on the channels of the country it was told about.
+wpasupplicant
+firmware-brcm80211
+wireless-regdb
+iw
+# USB network adapters that arrive as a CD drive with a Windows driver on it
+# (Realtek RTL8153 does, often) until something tells them to switch. The
+# second port of the bridge or the pair is usually such an adapter.
+# deploy/rapi-usb-nic.modeswitch adds the id the data package does not know.
+usb-modeswitch
+usb-modeswitch-data
+ethtool
+# Netfilter, which is what makes blocking possible at all: NFQUEUE parks the
+# packet, the engine reads it, and the verdict decides whether it continues.
+# Nothing is queued until somebody turns blocking on - see deploy/rapi-ips-mode.
+nftables
+
+# First boot grows the root partition to the whole card and then the filesystem
+# on it. growpart pulls in e2fsprogs (resize2fs, and the fsck.ext4 that
+# `fsck.repair=yes` in cmdline.txt asks for) and fdisk (sfdisk). None of those
+# were here: the image shipped an ext4 root with nothing that could grow it or
+# check it, and nobody noticed because the code that calls them had never run.
+cloud-guest-utils
+dosfstools
+
+# --- IDS --------------------------------------------------------------------
+# 8.x, not the 7.0.10 in trixie/main. Backports is a Debian archive signed with
+# the same key, so "only from Debian repositories" still holds.
+suricata/trixie-backports
+suricata-update/trixie-backports
+# 13 MB of country data for the alert map. The version in trixie/main is a
+# snapshot from 2019 and does not know most of today's address pools.
+geoip-database/trixie-backports
+
+# --- panel ------------------------------------------------------------------
+# From apt, not pip: the image carries no build tools and no network fetch at
+# first boot. The versions are what trixie ships, which is what the code is
+# tested against here.
+python3
+python3-fastapi
+python3-uvicorn
+python3-websockets
+python3-psutil

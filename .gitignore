@@ -1,0 +1,18 @@
+# Python
+backend/.venv/
+__pycache__/
+*.py[cod]
+
+# Node / Angular
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+
+# Dane panelu (baza alertow)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Artefakty budowania obrazu, zrzuty ekranu i logi z maszyn testowych
+build/

@@ -1,0 +1,116 @@
+@if (auth.signedIn()) {
+<div class="shell">
+  <aside class="sidebar" [class.open]="sidebarOpen()">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" class="brand-icon" aria-hidden="true">
+        <path class="brand-shield" [attr.d]="iconPath('shield')" />
+        <path class="brand-pulse" [attr.d]="iconPath('pulse')" />
+      </svg>
+      <div class="brand-text">
+        <strong>RaPi IDS Panel</strong>
+        <span class="dim">v{{ version() || '...' }}</span>
+      </div>
+    </div>
+
+    <nav>
+      <a routerLink="/dashboard" routerLinkActive="active" class="nav-item"
+         (click)="closeSidebar()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path [attr.d]="iconPath('gauge')" /></svg>
+        <span>Dashboard</span>
+      </a>
+
+      @for (mod of modules(); track mod.id) {
+        <a [routerLink]="mod.route" routerLinkActive="active" class="nav-item"
+           [title]="mod.description" (click)="closeSidebar()">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path [attr.d]="iconPath(mod.icon)" /></svg>
+          <span>{{ mod.name }}</span>
+          @if (mod.id === 'ids' && newAlerts() > 0) {
+            <span class="nav-badge">{{ newAlerts() > 99 ? '99+' : newAlerts() }}</span>
+          }
+        </a>
+      }
+    </nav>
+
+    <div class="sidebar-foot">
+      <!-- The stream state used to be here as well. The same signal twice, and
+           this copy could not show "paused" - so it was strictly less than the
+           one in the top bar, which is on screen on a phone too. -->
+      <div class="signed-in">
+        <span class="dim nowrap">{{ auth.user()?.username }}</span>
+        <button class="btn btn-icon btn-sm" (click)="signOut()"
+                aria-label="Sign out" title="Sign out">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path [attr.d]="iconPath('logout')" /></svg>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  @if (sidebarOpen()) {
+    <div class="backdrop" (click)="closeSidebar()"></div>
+  }
+
+  <main class="content">
+    <header class="topbar">
+      <button class="btn btn-icon menu-btn" (click)="toggleSidebar()" aria-label="Menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path [attr.d]="iconPath('menu')" /></svg>
+      </button>
+
+      <div class="spacer"></div>
+
+      <!-- Status belongs where the eye already is, not only at the foot of a
+           sidebar that is off-screen on a phone.
+
+           It reports the sensor, not the browser. A dot bound to the WebSocket
+           is green whenever the page is open, which is always, and in a panel
+           like this it reads as "the sensor is alive" while saying nothing of
+           the sort. That is the whole failure this project keeps meeting: the
+           service was active and the counters were green for twelve hours
+           while half of detection was dead. "idle" is that state, on screen. -->
+      <span class="stream-state" [class.down]="(live.sensor() === 'disconnected'
+                                              || live.sensor() === 'stopped')
+                                              && !live.restarting()"
+            [class.idle]="live.sensor() === 'idle' || live.restarting()"
+            [title]="sensorHint()">
+        <span class="dot" [class.on]="live.sensor() === 'live'"
+              [class.live]="live.sensor() === 'live'"
+              [class.warn]="live.sensor() === 'idle' || live.restarting()"
+              [class.off]="(live.sensor() === 'disconnected'
+                         || live.sensor() === 'stopped') && !live.restarting()"></span>
+        {{ sensorLabel() }}
+      </span>
+
+      <!-- Only while it is true. A badge that is always there is a badge nobody
+           reads on the day it means something. -->
+      @if (live.blocking()) {
+        <!-- Without naming a mechanism: the same badge covers a netfilter
+             queue and an inline pair the engine forwards itself, and the
+             Protection screen is where the difference is explained. -->
+        <span class="stream-state blocking"
+              title="The engine is in the path of the traffic and can stop packets.">
+          <span class="dot warn"></span> blocking
+        </span>
+      }
+
+      <button class="btn btn-icon" (click)="theme.next()"
+              [attr.aria-label]="themeLabel()" [title]="themeLabel() + ', click to change'">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path [attr.d]="iconPath(themeIcon())" /></svg>
+      </button>
+
+      <button class="btn btn-icon" (click)="live.toggleStreaming()"
+              [attr.aria-label]="live.streaming() ? 'Pause incoming data' : 'Resume incoming data'"
+              [title]="live.streaming() ? 'Pause incoming data' : 'Resume incoming data'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path [attr.d]="iconPath(live.streaming() ? 'pause' : 'play')"
+                [attr.fill]="live.streaming() ? 'none' : 'currentColor'" />
+        </svg>
+      </button>
+    </header>
+
+    <div class="page">
+      <router-outlet />
+    </div>
+  </main>
+</div>
+} @else {
+  <router-outlet />
+}

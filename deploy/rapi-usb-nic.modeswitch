@@ -1,0 +1,15 @@
+# Realtek RTL8153 gigabit adapters that come up as a CD drive.
+#
+# Installed as /etc/usb_modeswitch.d/0bda:8151, which is where
+# usb_modeswitch_dispatcher looks before its own collection. That collection
+# (usb-modeswitch-data 20191128) knows 0bda:1a2b and not this id, so without
+# this file the adapter stays a 1.2 MB virtual CD with the Windows driver on it,
+# no network driver binds, and the second port of the bridge or the pair is
+# simply not there. Seen on a cold boot with the adapter plugged in; replugging
+# it sometimes skipped the CD, which is why it looked like a loose cable.
+#
+# The message is Realtek's own "switch to network mode" command. After it the
+# adapter comes back as 0bda:8153 and r8152 takes it.
+TargetVendor=0x0bda
+TargetProduct=0x8153
+MessageContent="555342430860d9a9c0000000800006e0000000000000000000000000000000"

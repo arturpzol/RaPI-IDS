@@ -1,0 +1,153 @@
+@if (loading()) {
+  <div class="card empty">Loading the notification settings...</div>
+}
+
+@if (!loading()) {
+  <section class="card">
+    <div class="card-title">Alert notifications by e-mail</div>
+    <p class="dim intro">
+      A panel nobody opens reports nothing. Alerts are collected for a few
+      minutes and arrive as one message, because a sensor on a mirror port can
+      raise hundreds an hour and a mailbox with one message per alert gets a
+      filter rule within a day.
+    </p>
+
+    <label class="switch">
+      <input type="checkbox" [(ngModel)]="form.enabled" name="enabled" />
+      <span>Send e-mail when alerts come in</span>
+    </label>
+
+    <div class="grid">
+      <label>
+        <span>Mail server</span>
+        <input type="text" class="mono" [(ngModel)]="form.host" name="host"
+               placeholder="smtp.example.net" autocomplete="off" />
+      </label>
+
+      <label class="narrow">
+        <span>Port</span>
+        <input type="number" class="mono" [(ngModel)]="form.port" name="port"
+               min="1" max="65535" />
+      </label>
+
+      <label>
+        <span>Connection security</span>
+        <select [(ngModel)]="form.security" name="security">
+          @for (opt of securityOptions; track opt.value) {
+            <option [value]="opt.value">{{ opt.label }}</option>
+          }
+        </select>
+      </label>
+
+      <label>
+        <span>Username</span>
+        <input type="text" class="mono" [(ngModel)]="form.username" name="username"
+               autocomplete="off" placeholder="leave empty for a server without login" />
+      </label>
+
+      <label>
+        <span>Password</span>
+        <input type="password" class="mono" [(ngModel)]="password" name="password"
+               autocomplete="new-password"
+               [placeholder]="passwordSet() ? 'stored, leave blank to keep it' : ''" />
+        @if (passwordSet()) {
+          <button type="button" class="link" (click)="clearPassword()">remove it</button>
+        }
+      </label>
+
+      <label>
+        <span>From</span>
+        <input type="text" class="mono" [(ngModel)]="form.sender" name="sender"
+               placeholder="ids@example.net" autocomplete="off" />
+      </label>
+
+      <label class="wide">
+        <span>Send to, one address per line</span>
+        <textarea rows="3" class="mono" [(ngModel)]="recipients" name="recipients"
+                  spellcheck="false" placeholder="you@example.net"></textarea>
+      </label>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-title">How loud</div>
+    <p class="dim intro">
+      The two settings that decide whether these messages keep being read.
+    </p>
+
+    <div class="grid">
+      <label>
+        <span>Send alerts down to</span>
+        <select [(ngModel)]="form.min_severity" name="min_severity">
+          @for (opt of severityOptions; track opt.value) {
+            <option [value]="opt.value">{{ opt.label }}</option>
+          }
+        </select>
+      </label>
+
+      <label>
+        <span>Collect alerts for</span>
+        <select [(ngModel)]="form.digest_seconds" name="digest_seconds">
+          @for (opt of digestOptions; track opt.value) {
+            <option [value]="opt.value">{{ opt.label }}</option>
+          }
+        </select>
+      </label>
+
+      <label class="narrow">
+        <span>At most, messages per hour</span>
+        <input type="number" [(ngModel)]="form.max_per_hour" name="max_per_hour"
+               min="1" max="120" />
+      </label>
+    </div>
+
+    <p class="hint">
+      At most {{ ceiling() }} messages a day. Alerts the limit holds back are not
+      e-mailed; they stay in the panel like every other alert, and the next
+      message says how many were held back. That next message goes out when a
+      new alert arrives, so after a noisy hour that ends in silence the count
+      waits in the panel's alert list, not in the mailbox.
+    </p>
+  </section>
+
+  <section class="card">
+    <div class="card-title">State</div>
+    @if (status(); as s) {
+      <dl class="state">
+        <dt>Sender</dt>
+        <dd>{{ s.running ? 'running' : 'not running' }}</dd>
+        <dt>Waiting to be sent</dt>
+        <dd>{{ s.waiting }}</dd>
+        <dt>Held back by the limit</dt>
+        <dd>{{ s.held_back }}</dd>
+        <dt>Sent in the last hour</dt>
+        <dd>{{ s.sent_last_hour }}</dd>
+        <dt>Last message</dt>
+        <dd>{{ lastSent() }}</dd>
+      </dl>
+      @if (s.last_error) {
+        <p class="banner danger">Last attempt failed: {{ s.last_error }}</p>
+      }
+      @if (s.dropped) {
+        <p class="banner warn">
+          {{ s.dropped }} alerts were dropped before reaching the sender, which
+          means it was stuck or the network was gone. They are in the panel.
+        </p>
+      }
+    }
+
+    <div class="actions">
+      <button class="btn btn-primary" (click)="save()" [disabled]="busy() !== null" [attr.aria-busy]="(busy() === 'save') || null">
+        {{ busy() === 'save' ? 'Saving...' : 'Save' }}
+      </button>
+      <button class="btn" (click)="sendTest()"
+              [disabled]="busy() !== null || !form.host || !recipientList().length" [attr.aria-busy]="(busy() === 'test') || null">
+        {{ busy() === 'test' ? 'Sending...' : 'Save and send a test message' }}
+      </button>
+    </div>
+  </section>
+
+  @if (message(); as msg) {
+    <div class="card" [class.error-card]="!msg.ok" [class.ok-card]="msg.ok">{{ msg.text }}</div>
+  }
+}

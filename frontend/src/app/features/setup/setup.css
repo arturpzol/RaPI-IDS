@@ -1,0 +1,197 @@
+/* --- progress --- */
+
+.steps {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0 0 1.1rem;
+  padding: 0;
+  list-style: none;
+}
+.steps button {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.steps button span {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.steps button:disabled { cursor: default; opacity: 0.55; }
+.steps .on button { border-color: var(--accent); color: var(--text); }
+.steps .on button span { background: var(--accent); color: #fff; }
+.steps .done button { color: var(--text-muted); }
+
+/* --- step 1: the layouts --- */
+
+.topo-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+@media (min-width: 720px) {
+  .topo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1320px) {
+  .topo-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.topo-card {
+  display: block;
+  padding: 0.9rem 1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--bg-raised) 0%, var(--bg-elevated) 42%);
+  box-shadow: var(--shadow-md), var(--edge);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+.topo-card:not(.off):hover { border-color: var(--border-strong); }
+.topo-card.picked {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md), var(--edge), var(--ring);
+}
+
+/* Unavailable is not the same as irrelevant: the picture stays readable so the
+   layout can still be understood and planned for. */
+.topo-card.off { cursor: default; }
+.topo-card.off topology-diagram { opacity: 0.4; }
+.topo-card.off .topo-name, .topo-card.off .topo-summary { color: var(--text-dim); }
+
+.topo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+.topo-name { font-size: var(--fs-base); font-weight: 600; }
+.pill.block { border-color: color-mix(in srgb, var(--warn) 40%, transparent); color: var(--warn); }
+
+.topo-summary {
+  margin: 0.3rem 0 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.topo-why {
+  margin: 0.5rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+/* Two label/value lists, in step 1 and step 4. Same shape, so one rule. */
+.detail dl, .recap {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.4rem 1rem;
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.detail dt, .recap dt { color: var(--text-dim); padding-top: 0.1rem; }
+.detail dt {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.detail dd { margin: 0; color: var(--text-muted); }
+.recap dd { margin: 0; color: var(--text); }
+
+/* --- steps 2 and 3 --- */
+
+.assign {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+@media (min-width: 900px) {
+  /* The drawing keeps the wider half: it is what is being decided, the selects
+     are only how the decision is entered. */
+  .assign { grid-template-columns: minmax(0, 1.25fr) minmax(240px, 1fr); }
+}
+
+.assign-map {
+  /* The drawing is schematic, so past a certain size it only gets emptier. */
+  max-width: 620px;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+}
+
+.assign-form { display: flex; flex-direction: column; gap: 0.7rem; }
+.assign-form label { display: flex; flex-direction: column; gap: 0.25rem; }
+.assign-form label > span {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.assign-form select { width: 100%; }
+
+.hint { margin: 0 0 0.7rem; color: var(--text-muted); font-size: var(--fs-sm); }
+.hint:last-child { margin-bottom: 0; }
+.hint strong { color: var(--text); font-family: var(--mono); }
+
+.todo { margin: 0; padding-left: 1.15rem; color: var(--text-muted); font-size: var(--fs-sm); }
+.todo li { margin-bottom: 0.4rem; }
+
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+/* --- steps 3 to 5 --- */
+
+.assign-form textarea {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  resize: vertical;
+}
+
+.mono { font-family: var(--mono); }
+.net-title { margin-top: 1.1rem; }
+
+.steps-result { margin-top: 0.9rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.step-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.step-line.bad { color: var(--danger); }
+.step-line code {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+

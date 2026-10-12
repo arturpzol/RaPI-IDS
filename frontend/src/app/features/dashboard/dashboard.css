@@ -1,0 +1,219 @@
+.error-card {
+  margin-bottom: 1rem;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.tiles,
+.tile-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+/* The strip is two questions, not one row of seven answers: the state of this
+   device on the left, the sharpness of today's traffic on the right. The frame
+   is what stops "Blocked" from being read as a sixth tier of a five tier
+   scale. Flex rather than one grid, so the two groups keep their own widths
+   and fold under each other whole when the screen is narrow. */
+.tiles-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+.tiles-row .tile-group {
+  margin-bottom: 0;
+  padding: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius-lg) + 5px);
+  background: var(--bg-sunken);
+}
+/* As wide as the tiles it holds and no wider. Its second tile, "Blocked", is
+   absent while the engine only reads a copy, and a group claiming a fixed
+   share of the row then stretched the one remaining tile across a third of the
+   screen: a number nobody sized, made to look like the widest thing there.
+ 
+   Flex inside it, not the grid the other strips use: `repeat(auto-fit, ...)`
+   resolves to a single column when the container is sized by its own content,
+   which is exactly what `flex: 0 1 auto` asks for, and the two tiles then sat
+   one above the other. The children still wrap when the row is squeezed. */
+.group-state {
+  flex: 0 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+}
+.group-state > * { flex: 1 1 11rem; }
+/* Takes what is left, and is allowed to shrink to two columns before the row
+   breaks: it holds five tiles to the other's one or two. */
+.group-rating { flex: 1 1 34rem; }
+
+/* Cards in one row end at the same line. The global default is align-items:
+   start, which is right where a two-line card sits next to a chart; here the
+   cards in a row hold comparable things, and ragged bottoms read as a rendering
+   fault rather than as a layout. The chart card gets `fill` so the extra height
+   goes into the plot instead of into an empty strip. */
+.grid.cols-2 { align-items: stretch; }
+
+/* Only for a card whose content is meant to grow into the height the row gives
+   it - the rest keep their content at the top, where it is read from. */
+.cols-2 > .card.grows { display: flex; flex-direction: column; }
+
+/* Explicit columns, not auto-fit: auto-fit kept adding columns on a wide
+   screen, and a card spanning "all of them" grew without limit. */
+.cols-2 { grid-template-columns: minmax(0, 1fr); }
+
+/* Dense: the row of three below takes a full row, and cards of mixed width
+   otherwise leave an empty cell wherever a two-column card did not fit next to
+   its neighbour. Dense lets a later one-column card fall into that cell instead
+   of leaving a hole in the middle of the grid. Reading order shifts a little,
+   which costs nothing here - every card carries its own title. */
+.cols-2 { grid-auto-flow: dense; }
+
+/* A row of cards that belong together, held in one line of its own across the
+   whole grid. auto-fit here, unlike above: no card in the row spans, so the
+   track count follows the width of this row rather than the viewport, and the
+   three stay side by side whatever column count the grid is running. */
+.card-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+@media (min-width: 760px) {
+  .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1240px) {
+  .cols-2 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Fourth column only past 2000px. At 1920 three columns already fill the row;
+   splitting into four there would just make every card narrower. */
+@media (min-width: 2000px) {
+  .cols-2 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* Two columns out of three - wide enough for a chart or a table, but the
+   neighbouring card still fits beside it. */
+.wide { grid-column: span 2; }
+
+@media (max-width: 759px) {
+  .wide { grid-column: span 1; }
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.45rem 1rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+.kv > span:nth-child(odd) { font-size: 0.8rem; }
+
+.meters { display: flex; flex-direction: column; gap: 0.8rem; }
+.uptime { margin-top: 0.8rem; font-size: 0.75rem; }
+
+code {
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: var(--bg-input);
+  font-size: 0.8rem;
+}
+
+.empty p { margin: 0; }
+.empty-cmd { margin-top: 0.65rem !important; font-size: var(--fs-xs); }
+
+/* Counts the map cannot show: our own segment, other private ranges, addresses
+   the database has no entry for. */
+.geo-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  text-decoration: none;
+  transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.chip:hover { border-color: var(--border-strong); color: var(--text); }
+.chip-value { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* The one-time prompt to say how the device is wired. Accent border rather than
+   a warning colour: nothing is broken, a question has just never been asked. */
+.layout-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  border-left: 3px solid var(--accent);
+}
+.layout-note strong { font-size: var(--fs-base); }
+.layout-note p {
+  margin: 0.25rem 0 0;
+  max-width: 78ch;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.layout-note .btn { flex-shrink: 0; }
+
+/* Same shape as the layout note, louder. The layout note is a question nobody
+   has answered yet; this one is a sensor that is not working, so it borrows the
+   warning colours rather than the accent. */
+.capture-note { border-left-color: var(--warn); }
+.capture-note strong { color: var(--warn); }
+.capture-note.bad { border-left-color: var(--danger); }
+.capture-note.bad strong { color: var(--danger); }
+
+/* Three things in one card title: the name on the left, then the control and
+   the link together on the right. Without this the flex row spreads all three
+   evenly and the checkbox floats in the middle of the header. */
+.card-title .check {
+  margin-left: auto;
+  font-size: var(--fs-sm);
+}
+
+/* The window selector sits on the same line as the title, pushed to the far
+   end. It governs the whole page, so it belongs to the page heading rather
+   than to any one card. */
+.head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+/* A reading outside its range says so in colour as well as in words. These two
+   used to be tiles of their own in the alert strip, where their colour was the
+   whole message; inside a card the detail beside them is small text, and small
+   text is the first thing an eye skips. */
+.kv .bad { color: var(--danger); font-weight: 600; }
+.kv.temp { margin-top: 0.85rem; }
+
+/* The day totals under the chart title. Small, because the chart is the
+   subject and these are its caption, but not dim to the point of decoration:
+   the two numbers are the ones somebody came to read. */
+.day-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 1.1rem;
+  margin: -0.45rem 0 0.7rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.day-line strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.day-line a { color: inherit; text-decoration: none; }
+.day-line a:hover { color: var(--text); text-decoration: underline; }

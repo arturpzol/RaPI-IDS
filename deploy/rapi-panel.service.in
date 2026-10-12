@@ -1,0 +1,110 @@
+# Template. The paths differ between a development checkout and the appliance
+# image, so they are filled in at install time:
+#
+#   @PANEL_ROOT@  where the code sits        (checkout root  | /opt/rapi-panel)
+#   @DATA_DIR@    database, settings, certs  (<root>/data    | /var/lib/rapi-panel)
+#   @PYTHON@      interpreter                (venv python    | /usr/bin/python3)
+#   @PANEL_USER@  the account it runs as
+#
+# Rendered by scripts/install-service.sh and by scripts/build-image.sh.
+[Unit]
+Description=RaPi IDS Panel - modular admin panel (IDS/Suricata + system)
+Documentation=file://@PANEL_ROOT@/README.md
+After=network-online.target suricata.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@PANEL_USER@
+Group=@PANEL_USER@
+WorkingDirectory=@PANEL_ROOT@
+Environment=RAPI_DATA_DIR=@DATA_DIR@
+# The certificate lives with the data, not next to the code: on the appliance
+# the code directory is read-only and shared between updates.
+Environment=RAPI_TLS_DIR=@DATA_DIR@/tls
+Environment=RAPI_PORT=443
+Environment=RAPI_SERVE_TLS=1
+# Origins for ng serve are a dev convenience; in production nothing may call
+# the API cross-origin with credentials.
+Environment=RAPI_CORS_ORIGINS=
+ExecStart=@PYTHON@ -m uvicorn app.main:app \
+    --app-dir @PANEL_ROOT@/backend --host 0.0.0.0 --port 443 \
+    --ssl-certfile @DATA_DIR@/tls/server.crt \
+    --ssl-keyfile  @DATA_DIR@/tls/server.key
+# always, not on-failure: on-failure ignores a clean exit, so anything that asks
+# the process to stop politely (a stray signal, an OOM kill that lands as a
+# TERM, a mistaken pkill) left the appliance with no panel until someone
+# rebooted it. An explicit "systemctl stop" still stops it.
+Restart=always
+RestartSec=5
+
+# 443 and 80 are privileged ports and the panel runs as an ordinary user, so it
+# is granted exactly one capability: the right to bind them. Not root, and not
+# the whole set - only CAP_NET_BIND_SERVICE, and only ambient so the process
+# keeps it after dropping to the rapi user.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+# The bounding set has to leave room for sudo as well. It is setuid-root, but a
+# bounding set of CAP_NET_BIND_SERVICE alone masks the capabilities it needs to
+# become root, and every sudo-backed feature of the panel then fails with
+# "unable to change to root gid" - engine restarts, rule rebuilds, log moves and
+# the capture setup, all of them silently. The three added here are the minimum
+# sudo needs, measured one at a time; without CAP_AUDIT_WRITE it still refuses,
+# with "unable to send audit message".
+#
+# This is not a way in on its own: the process still runs as the rapi user, and
+# what it may do as root is whatever /etc/sudoers.d/rapi-panel lists and nothing
+# else.
+# CAP_NET_RAW and CAP_NET_ADMIN are for the capture helpers, not for the panel:
+# the bounding set caps what a root child may hold, so without them the probe
+# cannot open a packet socket and the interface cannot be taken off DHCP, both
+# failing as "Operation not permitted" while running as root.
+#
+# CAP_DAC_READ_SEARCH is for one specific thing: /home/rapi is mode 0700, so a
+# root process without it cannot even traverse into the panel's data directory.
+# suricata-update then reports "disable-conf file does not exist" for a file
+# that is plainly there, and every silenced signature quietly starts firing
+# again. Read and traverse only - not CAP_DAC_OVERRIDE, which would also let it
+# ignore write permissions.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE \
+                      CAP_NET_RAW CAP_NET_ADMIN CAP_DAC_READ_SEARCH
+
+# The panel reads engine logs and calls systemctl through a narrow sudoers entry,
+# so it needs no more privileges than an ordinary user.
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+# ProtectSystem=full makes /etc read-only for everything in this unit, and that
+# includes the root-owned helpers sudo starts: they run inside the same mount
+# namespace, so being root buys them nothing here. Every directory a helper
+# writes to needs a hole, or the operation fails with "Read-only file system"
+# at the moment somebody presses the button.
+#
+# This list is not maintained by hand. test_deploy.py reads every /etc path out
+# of deploy/rapi-* and fails if one is not covered, because the way this breaks
+# is always the same: a helper learns to write somewhere new, the unit is not
+# touched, and nothing goes wrong until it runs through the service. Running the
+# helper from a shell works - a shell is not in this namespace - which is what
+# makes it so easy to ship.
+#
+#   /etc/suricata       engine config, HOME_NET, the capture block
+#   /etc/NetworkManager taking a capture interface out of NM's hands
+#   /etc/systemd/system  the unit that re-prepares that interface after a reboot,
+#                       and the drop-in that puts the engine in queue mode
+#   /etc/logrotate.d    rotation for the log directory
+#   /etc/nftables.d     the queue rule that sends packets past the engine, which
+#                       is what makes blocking possible at all
+#
+# The rest of /etc, plus /usr and /boot, stay read-only.
+#
+# The dash on the last one is not decoration. systemd refuses to start a service
+# whose ReadWritePaths names a directory that is not there, and it refuses with
+# "Failed at step NAMESPACE", which reads as a broken interpreter rather than a
+# missing directory. Adding /etc/nftables.d without the dash stopped the panel
+# from starting at all - 52 restarts in one boot - because the nftables package
+# does not create it. With the dash a device that lacks it simply cannot turn
+# blocking on, which is a feature missing rather than a panel missing.
+ReadWritePaths=@DATA_DIR@ /etc/suricata /etc/NetworkManager /etc/systemd/system /etc/logrotate.d -/etc/nftables.d
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+[Unit]
+Description=Apply the Raspberry Pi Imager settings from the boot partition
+Documentation=file:///opt/rapi-panel/README.md
+# Before the network, not after it. The wizard's answer about Wi-Fi is the one
+# that decides whether this device has a network at all, so it has to be on
+# disk before NetworkManager reads its connections. A device flashed for a
+# wireless house would otherwise sit unreachable, which on a box with no screen
+# looks exactly like a dead card.
+DefaultDependencies=no
+# The mount itself, by name. local-fs.target is not enough: the boot partition
+# is "nofail" in fstab, and systemd does not order a nofail mount before
+# local-fs.target, it only starts it. On the first real card the conditions
+# below were tested a second before the partition was mounted, found no file,
+# and the unit was skipped without a word: no hostname, no Wi-Fi, no SSH
+# password, from a settings file that was there all along.
+After=local-fs.target boot-firmware.mount
+Wants=boot-firmware.mount network-pre.target
+Before=network-pre.target NetworkManager.service ssh.service rapi-first-boot.service
+# Not before systemd-udev-trigger.service any more. That was for the
+# regulatory domain in modprobe.d to be on disk before cfg80211 loads, but the
+# partition's device does not exist as far as systemd knows until udev has
+# been triggered (the initramfs wipes its udev database on the way out), so
+# the two orderings cannot both hold. The script also sets the domain with
+# "iw reg set", and modprobe.d is in place from the second boot on.
+# Written once by the flashing tool and removed once it has been applied. Either
+# file starts it: the "|" makes the two conditions an OR, where plain repeated
+# conditions must all hold.
+ConditionPathExists=|/boot/firmware/rpi-preseed.toml
+ConditionPathExists=|/boot/firmware/custom.toml
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rapi-imager-config
+RemainAfterExit=yes
+StandardOutput=journal+console
+
+[Install]
+WantedBy=sysinit.target

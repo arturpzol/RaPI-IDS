@@ -1,0 +1,17 @@
+[Unit]
+Description=Console banner with the panel address (RaPi IDS)
+# After the network so there is an address to print, and after the first boot so
+# the hostname and the certificate it generates are the ones on screen.
+After=network-online.target rapi-first-boot.service
+Wants=network-online.target
+# Before the login prompt is drawn, so the first thing on the screen is right
+# rather than corrected a moment later.
+Before=getty.target serial-getty@ttyAMA0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rapi-issue
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Refresh IDS signatures daily (RaPi IDS Panel)
+
+[Timer]
+# Daily, the same interval a UniFi gateway uses. Not more often: Emerging
+# Threats publishes about that fast, and each run rebuilds 68 000 rules.
+OnCalendar=daily
+# Without this every one of these devices asks for the same file at midnight.
+RandomizedDelaySec=4h
+# The sensor is not expected to be on at any particular time, and a missed day
+# is exactly the case this exists for.
+Persistent=true
+# Nothing about a rule update needs to happen during the boot it was scheduled
+# for, and a Pi booting into a rebuild of 68 000 rules is a Pi that looks hung.
+OnBootSec=15min
+
+[Install]
+WantedBy=timers.target

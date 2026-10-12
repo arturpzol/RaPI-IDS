@@ -1,0 +1,543 @@
+/* Panel theme.
+ *
+ * Dark by default (a tool for staring at alerts), light on request; every colour
+ * is a token, so the variants are a swap of variables.
+ *
+ * Three ideas hold the look together:
+ *
+ *   1. Light comes from above. Every raised surface carries a 1px inset
+ *      highlight on its top edge (--edge) and a shadow below it. That pair is
+ *      what makes a rectangle read as an object rather than a coloured div.
+ *   2. Depth replaces outlines. Hairline borders are kept faint and do the
+ *      minimum; separation comes from surface contrast and shadow instead.
+ *   3. Numbers are furniture. Every figure that updates in place is set in
+ *      tabular figures, so digits do not jitter as values change.
+ */
+
+/* Both faces come from Debian packages (fonts-inter-variable,
+   fonts-jetbrains-mono-web) and are served from this box - no CDN, nothing
+   fetched from the internet at runtime. Inter is the variable cut, so one
+   350 kB file covers every weight we use. */
+@font-face {
+  font-family: 'Inter var';
+  src: url('/fonts/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+  font-weight: 500 700;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* --- surfaces: a ladder, each step a little lighter than the last --- */
+  --bg:            #0b1015;
+  --bg-sunken:     #080c10;
+  --bg-elevated:   #141b23;
+  --bg-raised:     #1a232d;
+  --bg-hover:      #1f2a35;
+  --bg-input:      #0c1218;
+
+  --border:        #222c37;
+  --border-strong: #33404e;
+
+  --text:          #e6ebf2;
+  --text-muted:    #93a1b1;
+  --text-dim:      #64717f;
+
+  --accent:        #4a9eff;
+  --accent-hover:  #6bb1ff;
+  --accent-dim:    #16304d;
+  --accent-glow:   rgba(74, 158, 255, 0.35);
+
+  --ok:            #35c759;
+  --warn:          #ffb020;
+  --danger:        #ff4d4f;
+  --info:          #4a9eff;
+
+  /* engine alert severities: 1 = most severe */
+  --sev-1:         #e03131;
+  --sev-2:         #ff8c00;
+  --sev-3:         #ffd426;
+  --sev-4:         #6b7d8f;
+
+  /* --- light and depth ---
+     --edge is the highlight along the top of a raised surface. It is the single
+     most load-bearing value in this file: without it cards read as flat fills. */
+  --edge:          inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  --edge-strong:   inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  --shadow-sm:     0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-md:     0 1px 2px rgba(0, 0, 0, 0.22), 0 8px 20px -10px rgba(0, 0, 0, 0.5);
+  --shadow-lg:     0 2px 6px rgba(0, 0, 0, 0.3), 0 24px 48px -16px rgba(0, 0, 0, 0.65);
+  --ring:          0 0 0 3px rgba(74, 158, 255, 0.3);
+
+  /* Ambient wash. Two very faint pools of accent keep the background from
+     reading as one flat rectangle across a 27" screen. */
+  --ambient:
+    radial-gradient(1100px 560px at 12% -12%, rgba(74, 158, 255, 0.075), transparent 62%),
+    radial-gradient(820px 460px at 102% -4%, rgba(120, 110, 255, 0.05), transparent 58%);
+
+  /* --- radii: a hierarchy, not one value everywhere --- */
+  --radius-lg:     14px;
+  --radius:        9px;
+  --radius-sm:     6px;
+  --radius-full:   999px;
+
+  /* --- type scale --- */
+  --fs-xs:         0.6875rem;  /* 11px - eyebrow labels, table heads */
+  --fs-sm:         0.8125rem;  /* 13px - secondary text, cells */
+  --fs-base:       0.875rem;   /* 14px - body */
+  --fs-md:         1rem;       /* 16px - card headings */
+  --fs-lg:         1.375rem;   /* 22px - page title */
+  --fs-xl:         2rem;       /* 32px - stat numbers */
+
+  /* Expo-out: fast start, long settle. Reads as "physical" rather than linear. */
+  --ease:          cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast:        0.12s;
+  --t-base:        0.22s;
+
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --sans: 'Inter var', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Light palette. Applied by attribute only - an inline script in index.html
+   resolves the stored preference (or the OS setting) and stamps data-theme on
+   <html> before first paint, so there is no flash and no second copy of these
+   values living inside a media query. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg:            #eef1f6;
+  --bg-sunken:     #e4e9f0;
+  --bg-elevated:   #ffffff;
+  --bg-raised:     #ffffff;
+  --bg-hover:      #f1f5fa;
+  --bg-input:      #ffffff;
+  --border:        #dde3ec;
+  --border-strong: #c2ccd9;
+  --text:          #141c26;
+  --text-muted:    #55636f;
+  --text-dim:      #8593a1;
+  --accent-dim:    #dbeafe;
+  --sev-4:         #6b7a89;
+  --edge:          inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --edge-strong:   inset 0 1px 0 rgba(255, 255, 255, 1);
+  --shadow-sm:     0 1px 2px rgba(18, 28, 45, 0.06);
+  --shadow-md:     0 1px 2px rgba(18, 28, 45, 0.05), 0 8px 20px -10px rgba(18, 28, 45, 0.16);
+  --shadow-lg:     0 2px 6px rgba(18, 28, 45, 0.07), 0 24px 48px -16px rgba(18, 28, 45, 0.2);
+  --ambient:
+  radial-gradient(1100px 560px at 12% -12%, rgba(74, 158, 255, 0.1), transparent 62%),
+  radial-gradient(820px 460px at 102% -4%, rgba(120, 110, 255, 0.07), transparent 58%);
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; height: 100%; }
+
+body {
+  background: var(--ambient), var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--fs-base);
+  line-height: 1.55;
+  letter-spacing: -0.006em;   /* Inter is roomy by default; this tightens UI text */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--accent-dim); color: var(--text); }
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.018em;   /* headings need more negative tracking than body */
+}
+h1 { font-size: var(--fs-lg); }
+h2 { font-size: var(--fs-md); }
+h3 { font-size: var(--fs-base); }
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color var(--t-fast) var(--ease);
+}
+a:hover { color: var(--accent-hover); }
+
+code, pre, .mono {
+  font-family: var(--mono);
+  font-feature-settings: 'zero' 1;   /* slashed zero - 0 vs O matters in IPs and SIDs */
+}
+
+/* Anything that updates in place gets fixed-width digits. Without this a
+   counter ticking from 199 to 200 shifts every character beside it. */
+.num, .tile-value, .meter-pct, table.data td, .kv, .pill, .mono {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--radius-sm);
+}
+
+/* --- shared elements --- */
+
+.card {
+  position: relative;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--bg-raised) 0%, var(--bg-elevated) 42%);
+  box-shadow: var(--shadow-md), var(--edge);
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--bg-raised), var(--bg-elevated));
+  box-shadow: var(--shadow-sm), var(--edge);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease),
+              border-color var(--t-fast) var(--ease),
+              transform var(--t-fast) var(--ease),
+              box-shadow var(--t-fast) var(--ease);
+}
+.btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--bg-hover), var(--bg-raised));
+  border-color: var(--border-strong);
+}
+/* Pressing moves the surface down into its own shadow. */
+.btn:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
+.btn:disabled { opacity: 0.42; cursor: not-allowed; box-shadow: none; }
+
+.btn-primary {
+  border-color: transparent;
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  box-shadow: var(--shadow-sm), var(--edge-strong), 0 4px 14px -6px var(--accent-glow);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #86c0ff, var(--accent-hover));
+  border-color: transparent;
+}
+
+.btn-danger { border-color: color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); }
+.btn-danger:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+.btn-sm { padding: 0.28rem 0.6rem; font-size: var(--fs-xs); }
+
+/* Square icon-only button - used for the menu and stream toggle. */
+.btn-icon { padding: 0.4rem; }
+.btn-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+input, select, textarea {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22), var(--ring);
+}
+input::placeholder { color: var(--text-dim); }
+
+/* --- tables --- */
+
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius);
+}
+
+table.data {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-sm);
+}
+table.data th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+table.data td {
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+table.data tbody tr { transition: background var(--t-fast) var(--ease); }
+table.data tbody tr:last-child td { border-bottom: none; }
+table.data tbody tr:hover { background: var(--bg-hover); }
+table.data tbody tr.clickable { cursor: pointer; }
+table.data tbody tr.selected {
+  background: var(--bg-hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* --- severity badges --- */
+
+.badge {
+  display: inline-block;
+  padding: 0.12rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.sev-1 { background: color-mix(in srgb, var(--sev-1) 18%, transparent); border-color: color-mix(in srgb, var(--sev-1) 35%, transparent); color: var(--sev-1); }
+.sev-2 { background: color-mix(in srgb, var(--sev-2) 16%, transparent); border-color: color-mix(in srgb, var(--sev-2) 32%, transparent); color: var(--sev-2); }
+.sev-3 { background: color-mix(in srgb, var(--sev-3) 16%, transparent); border-color: color-mix(in srgb, var(--sev-3) 32%, transparent); color: var(--sev-3); }
+.sev-4 { background: color-mix(in srgb, var(--sev-4) 18%, transparent); border-color: color-mix(in srgb, var(--sev-4) 34%, transparent); color: var(--sev-4); }
+/* No rating from ET. Deliberately the quietest of the five and not a colour on
+   the danger scale: "nobody graded this" is not a severity, and painting it as
+   one would put GPL and the engine's own stream events on the same footing as
+   a rule ET actually looked at. */
+.sev-none { background: color-mix(in srgb, var(--text-dim) 12%, transparent); border-color: color-mix(in srgb, var(--text-dim) 28%, transparent); color: var(--text-dim); }
+
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: background var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease);
+}
+.dot.on  { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+.dot.off { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent); }
+/* Running and seeing nothing. Not red, because nothing has failed, and not
+   green, because the sensor is not doing its job either. */
+.dot.warn { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
+
+/* A live indicator earns a pulse; a dead one must stay still, or "down" reads
+   as activity. */
+.dot.on.live { animation: pulse 2.4s var(--ease) infinite; }
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+  50%      { box-shadow: 0 0 0 6px color-mix(in srgb, var(--ok) 4%, transparent); }
+}
+
+/* --- page header ---
+   Was duplicated in three feature stylesheets with three different values; the
+   page title is chrome, so it belongs with the rest of the chrome. */
+
+.page-head { margin-bottom: 1.15rem; }
+.page-head h1 { font-size: var(--fs-lg); }
+.page-head p {
+  margin: 0.2rem 0 0;
+  max-width: 62ch;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  text-wrap: balance;
+}
+
+/* --- helpers --- */
+
+.muted { color: var(--text-muted); }
+.dim   { color: var(--text-dim); }
+.right { text-align: right; }
+.nowrap { white-space: nowrap; }
+/* start, not stretch: a card with two rows should be two rows tall. Stretching
+   it to match a chart beside it produces a large empty rectangle, which is what
+   made the grid look unconsidered. */
+.grid { display: grid; gap: 1rem; align-items: start; }
+.row { display: flex; align-items: center; gap: 0.6rem; }
+.row-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+
+/* --- banner ---
+   A line of explanation attached to what it explains, in three weights. The
+   panel had three hand-rolled versions of this before (.error-card, .warn-card
+   and one inside the setup wizard), which is two too many. */
+.banner {
+  margin: 0.85rem 0 0;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.banner.warn {
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+}
+.banner.danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+.spacer { flex: 1; }
+
+/* A quiet statement about what is on screen, not a control and not a warning.
+   Used where it is present nearly all the time - a coloured banner there would
+   only train the operator to ignore banners. */
+.muted-note {
+  margin: 0;
+  padding: 0.5rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+/* A button that acts like prose: for an action offered mid-sentence, where a
+   real button would break the line it is explaining. */
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-btn:hover { color: var(--text); }
+
+.empty {
+  padding: 2.25rem 1rem;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+/* --- entrance ---
+   Cards rise into place in reading order. The stagger is small (24 ms) - enough
+   to feel composed, short enough that the whole grid has settled inside 300 ms. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+/* .tile-group is the dashboard's framed half of a strip: the tiles inside it
+   are what rises, not the frame, so the two rows stay in step with the plain
+   .tiles strips on the other screens. */
+.tiles > *, .tile-group > *, .grid > * { animation: rise 0.45s var(--ease) backwards; }
+.tiles > *:nth-child(2), .tile-group > *:nth-child(2),
+.grid > *:nth-child(2) { animation-delay: 0.024s; }
+.tiles > *:nth-child(3), .tile-group > *:nth-child(3),
+.grid > *:nth-child(3) { animation-delay: 0.048s; }
+.tiles > *:nth-child(4), .tile-group > *:nth-child(4),
+.grid > *:nth-child(4) { animation-delay: 0.072s; }
+.grid > *:nth-child(5) { animation-delay: 0.096s; }
+.grid > *:nth-child(6) { animation-delay: 0.12s; }
+.grid > *:nth-child(7) { animation-delay: 0.144s; }
+.grid > *:nth-child(n + 8) { animation-delay: 0.168s; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --- scrollbars --- */
+
+* { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); background-clip: content-box; }
+
+/* A button whose action is running: a turning ring before its label, set with
+   [attr.aria-busy], which screen readers announce too. The label already says
+   what is happening ("Applying..."); the ring says it has not stalled. */
+.btn[aria-busy="true"]::before,
+.spinner {
+  content: "";
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+.btn[aria-busy="true"] { cursor: progress; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .btn[aria-busy="true"]::before, .spinner { animation-duration: 2.4s; }
+}
+/* The line under a long action: how long, and to leave the page open. */
+.wait-note { display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted); font-size: var(--fs-sm); margin: 0.5rem 0 0; }

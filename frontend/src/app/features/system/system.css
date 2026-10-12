@@ -1,0 +1,93 @@
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+/* Explicit columns, not auto-fit - see dashboard.css for why. */
+.cols-2 { grid-template-columns: minmax(0, 1fr); }
+
+@media (min-width: 760px) {
+  .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1240px) {
+  .cols-2 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Fourth column only past 2000px. At 1920 three columns already fill the row;
+   splitting into four there would just make every card narrower. */
+@media (min-width: 2000px) {
+  .cols-2 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+.wide { grid-column: span 2; }
+
+@media (max-width: 759px) {
+  .wide { grid-column: span 1; }
+}
+
+.meters { display: flex; flex-direction: column; gap: 0.75rem; }
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.42rem 1rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+.kv > span:nth-child(odd) { font-size: 0.8rem; }
+
+.error-card { margin-bottom: 1rem; border-color: var(--danger); color: var(--danger); }
+
+.warn-card {
+  margin-bottom: 1rem;
+  border-color: var(--warn);
+  border-left: 3px solid var(--warn);
+}
+.warn-card strong { color: var(--warn); }
+.warn-card ul { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.85rem; }
+
+td.bad { color: var(--danger); font-weight: 600; }
+
+/* Names the series under one shared window selector, so each chart does not
+   need a card and a title of its own. */
+.series-label {
+  margin: 0.9rem 0 0.15rem;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+.series-label:first-of-type { margin-top: 0.2rem; }
+
+/* --- the capture badge ---
+   A quiet chip next to the interface name, because on most rows there is no
+   badge at all and the eye should be able to find the one row that has one
+   without the table shouting. The warning variant is the exception: an
+   interface named for capture that cannot hand the engine anything is the
+   silent failure this panel exists to make loud. */
+.tag {
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.tag-warn {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.ssh-card p { margin: 0; }
+.ssh-card p + p { margin-top: 0.4rem; }
+.ssh-card code { overflow-wrap: anywhere; }

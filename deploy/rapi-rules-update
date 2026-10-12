@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Refresh the signature set, keeping what the panel switched off. Installed
+# root-owned and run by rapi-rules-update.timer once a day.
+#
+#   rapi-rules-update <disable-conf> <drop-conf>
+#
+# Why this exists: the panel had a "Download fresh signatures" button and
+# nothing else. An image flashed and left alone - which is the whole point of
+# this project - therefore ran on the rules from the day it was built, for as
+# long as it was plugged in, and looked perfectly healthy doing it. A UniFi
+# gateway refreshes on a 24 hour interval; this is the same thing.
+#
+# Neither argument is optional and neither is defaulted. Running suricata-update
+# without disable.conf rebuilds from the vendor set alone, which switches every
+# disabled category and every silenced signature back on. Without drop.conf it
+# rebuilds every rule as `alert`, which switches blocking off. Both failures are
+# invisible: the tool reports success either way, and the difference only shows
+# up as alerts that came back, or as a packet that was supposed to be stopped
+# and was not.
+set -euo pipefail
+
+DISABLE_CONF="${1:-}"
+DROP_CONF="${2:-}"
+[[ -n "$DISABLE_CONF" && -n "$DROP_CONF" ]] \
+  || { echo "usage: $0 <disable-conf> <drop-conf>" >&2; exit 2; }
+[[ -f "$DISABLE_CONF" ]] || { echo "no disable.conf at $DISABLE_CONF" >&2; exit 3; }
+[[ -f "$DROP_CONF" ]] || { echo "no drop.conf at $DROP_CONF" >&2; exit 3; }
+
+# --fail because without it a download that does not arrive is not an error:
+# the tool writes the rules that ship with the engine, 445 of them, and exits
+# 0. That happened here on 2026-10-10, the night after the engine went from
+# 8.0.6 to 8.0.7: the cache is kept per engine version, so there was nothing
+# to fall back on, 68 413 signatures were removed, and this script said "ok".
+# --no-reload because reloading is done here afterwards, and a reload that fails
+# should not be reported as a failed update.
+if ! OUTPUT="$(suricata-update --fail --no-reload --disable-conf "$DISABLE_CONF" \
+                                --drop-conf "$DROP_CONF" 2>&1)"; then
+  echo "$OUTPUT" >&2
+  echo "the signature update failed - the engine keeps the rules it has" >&2
+  exit 1
+fi
+printf '%s\n' "$OUTPUT" | tail -5
+
+# Rules on disk that the engine has not read are rules that are not running.
+if suricatasc -c reload-rules >/dev/null 2>&1; then
+  echo "ok signatures updated and the engine reloaded"
+elif systemctl reload suricata >/dev/null 2>&1; then
+  echo "ok signatures updated and the engine reloaded"
+else
+  echo "signatures updated, but the engine would not reload them" >&2
+  exit 4
+fi

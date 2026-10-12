@@ -1,0 +1,90 @@
+# Narrow privileges for the panel: engine control and rule updates only.
+#
+# NOTE: this is a template. scripts/install-service.sh (and the image build)
+# replace the @DISABLE_CONF@ and @DROP_CONF@ markers with the real paths of
+# disable.conf and drop.conf inside the panel data directory, and check the
+# result with visudo. Install it that way: a copy with one marker left in it
+# matches nothing the panel runs, and the rule update then asks for a password.
+#
+# Deliberately NOT "ALL" - the panel is reachable over HTTP, so every extra
+# command widens the attack surface. The suricata-update arguments are spelled
+# out character by character (no wildcards), so no other filter file or rule
+# output directory can be substituted.
+
+# start and stop are deliberately absent. The panel offers no button for them,
+# and leaving the privilege behind would make that narrowing cosmetic: anything
+# that reached the panel's user could still switch detection off. restart stays
+# because the panel needs it itself - moving the log directory and changing the
+# capture interface both require one - and reload is the rule reload behind the
+# only engine button there is.
+Cmnd_Alias RAPI_SURICATA_CTL = /usr/bin/systemctl restart suricata, \
+                               /usr/bin/systemctl reload suricata
+
+# Rule set rebuild: --offline uses the previously downloaded cache (detection
+# category change), the variant without --offline downloads fresh rules.
+Cmnd_Alias RAPI_SURICATA_RULES = \
+    /usr/bin/suricata-update --offline --no-reload --disable-conf @DISABLE_CONF@ --drop-conf @DROP_CONF@, \
+    /usr/bin/suricata-update --fail --no-reload --disable-conf @DISABLE_CONF@ --drop-conf @DROP_CONF@, \
+    /usr/bin/suricatasc -c reload-rules
+
+# Engine counters, read only. scripts/verify.sh measures capture loss and the
+# direction of the traffic from them, and the socket they come from is
+# root-owned. It grants no information the panel's user cannot already reach:
+# the same figures are written to eve.json every 30 s and the panel reads that
+# file continuously. The socket is the only place the per-interface counters
+# exist, which is what check 2 needs to tell a mirror from an ordinary port.
+Cmnd_Alias RAPI_ENGINE_COUNTERS = /usr/bin/suricatasc -c dump-counters
+
+# When the signature set was built and when it was downloaded. Read only, no
+# arguments, no wildcard. The panel's user cannot read suricata-update's cache
+# (root, 0750), and the archive in there is the only copy of the vendor's own
+# build stamp - the merged rule file is rewritten by every category change, so
+# its mtime says when the panel last rebuilt, not how old the detection is.
+Cmnd_Alias RAPI_RULES_DATE = /usr/local/sbin/rapi-rules-date
+
+# Detection or blocking. Three exact words, no wildcard: the script writes a
+# systemd drop-in and an nftables ruleset, both produced by itself as root, and
+# the argument only chooses which of the three it does.
+Cmnd_Alias RAPI_IPS_MODE = /usr/local/sbin/rapi-ips-mode status, \
+                           /usr/local/sbin/rapi-ips-mode ips, \
+                           /usr/local/sbin/rapi-ips-mode ids
+
+# Log rotation after a directory change in the panel. The wildcard is the
+# directory - the configuration content is produced by the script itself
+# (root:root), not by the panel, so this privilege cannot be used to inject a
+# postrotate section executed as root.
+Cmnd_Alias RAPI_LOGROTATE = /usr/local/sbin/rapi-log-dir *
+
+# Capture setup from the topology wizard. Same reasoning as the line above: the
+# wildcard is the argument, the content of every file written is produced by the
+# root-owned script itself, and each script validates what it is handed.
+#   apply - points the engine at an interface and sets HOME_NET, verified with
+#           suricata -T and rolled back if the engine refuses it,
+#   iface - takes the address off a capture interface and turns the offload
+#           engines off, installs the unit that does it again after a reboot,
+#           or hands the interface back to NetworkManager,
+#   probe - listens for a few seconds and counts frames. Addresses and counts
+#           only, never payloads.
+#   bridge - puts the device into the path of a link (the inline layout) or
+#            takes it back out. It refuses to bridge the interface carrying the
+#            default route, so this privilege cannot be used to cut the panel
+#            off the network.
+# Who forwards an inline link: the kernel bridge while detecting, the engine
+# while blocking. The wildcard is the arguments, which the root-owned script
+# validates before it touches anything: a mode word, two interface names that
+# must exist and differ, and a network list. It stops and starts the engine
+# inside the swap, which is not the same thing as granting stop: the panel
+# cannot reach a stopped engine through it, because every path out of the
+# script, the failure path included, starts the engine again.
+Cmnd_Alias RAPI_INLINE = /usr/local/sbin/rapi-inline *
+Cmnd_Alias RAPI_LOGIN = /usr/local/sbin/rapi-login-password status, \
+                       /usr/local/sbin/rapi-login-password set
+
+Cmnd_Alias RAPI_CAPTURE = /usr/local/sbin/rapi-capture-apply *, \
+                          /usr/local/sbin/rapi-capture-iface *, \
+                          /usr/local/sbin/rapi-capture-probe *, \
+                          /usr/local/sbin/rapi-bridge *
+
+@PANEL_USER@ ALL=(root) NOPASSWD: RAPI_SURICATA_CTL, RAPI_SURICATA_RULES, RAPI_RULES_DATE, \
+                          RAPI_LOGROTATE, RAPI_CAPTURE, RAPI_IPS_MODE, \
+                          RAPI_ENGINE_COUNTERS, RAPI_INLINE, RAPI_LOGIN

@@ -1,0 +1,7 @@
+# Installed as /etc/udev/rules.d/40-rapi-usb-nic.rules.
+#
+# Hands the Realtek adapter in its CD mode to usb-modeswitch, the same way the
+# package's own rules do for the ids it knows. The wrapper only starts
+# usb_modeswitch@.service and returns, so udev is not held up; the service
+# reads /etc/usb_modeswitch.d/0bda:8151, which comes from rapi-usb-nic.modeswitch.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="8151", RUN+="/usr/lib/udev/usb_modeswitch '/%k'"

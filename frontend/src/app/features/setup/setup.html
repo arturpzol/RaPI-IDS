@@ -1,0 +1,317 @@
+<header class="page-head">
+  <div>
+    <h1>How this Pi is connected</h1>
+    <p class="dim">
+      Rules match only the traffic that reaches this device.
+      Cabling decides what reaches it, not the panel.
+    </p>
+  </div>
+</header>
+
+@if (error(); as message) {
+  <p class="banner danger" role="alert">{{ message }}</p>
+}
+
+<ol class="steps" aria-label="Progress">
+  @for (label of stepLabels; track $index; let i = $index) {
+    <li [class.on]="step() === i + 1" [class.done]="step() > i + 1">
+      <button type="button" (click)="toStep(i + 1)"
+              [disabled]="(i > 0 && !chosen()) || (i > 1 && unsaved())">
+        <span>{{ i + 1 }}</span> {{ label }}
+      </button>
+    </li>
+  }
+</ol>
+
+<!-- Step 1: the layouts -->
+@if (step() === 1) {
+  <div class="topo-grid">
+    @for (item of profiles(); track item.id) {
+      <button type="button" class="topo-card"
+              [class.picked]="chosen() === item.id"
+              [class.off]="!item.available"
+              [attr.aria-pressed]="chosen() === item.id"
+              (click)="pick(item)">
+        <topology-diagram [profile]="item.id" />
+
+        <div class="topo-head">
+          <span class="topo-name">{{ item.name }}</span>
+          <!-- Three answers, not two: on "This device only" the blocking switch
+               drops packets to and from this Pi, which is real, and still not
+               the network. "watch only" there was false. -->
+          @if (item.can_block) {
+            <span class="pill block">can block</span>
+          } @else if (item.id === 'self') {
+            <span class="pill">blocks this Pi only</span>
+          } @else {
+            <span class="pill">watch only</span>
+          }
+        </div>
+        <p class="topo-summary">{{ item.summary }}</p>
+
+        <!-- An unavailable layout still gets its picture and its reason. Hiding
+             it would save a line and cost the reader the fact that a cheap
+             adapter is the whole difference. -->
+        @if (!item.available) {
+          <p class="topo-why">{{ item.reason }}</p>
+        }
+      </button>
+    }
+  </div>
+
+  @if (profile(); as item) {
+    <div class="card detail">
+      <div class="card-title">{{ item.name }}</div>
+      <dl>
+        <dt>Sees</dt>
+        <dd>{{ item.sees }}</dd>
+        <dt>Blind to</dt>
+        <dd>{{ item.blind_to }}</dd>
+        <dt>Needs</dt>
+        <dd>{{ item.hardware }}</dd>
+        @if (item.blocking_cost) {
+          <!-- Named "When it blocks" rather than hidden in the summary: on this
+               layout blocking trades a link that survives a stopped engine for
+               one that does not, and that is not a detail to find out later. -->
+          <dt>When it blocks</dt>
+          <dd>{{ item.blocking_cost }}</dd>
+        }
+        @if (item.blocking_needs) {
+          <!-- Traffic through the Pi reads as "so it can block". It cannot, and
+               the pill above says watch only - this is where that gets a
+               reason instead of just a label. -->
+          <dt>Does not block</dt>
+          <dd>{{ item.blocking_needs }}</dd>
+        }
+      </dl>
+      @if (!item.can_apply) {
+        <p class="banner">
+          The panel records this layout but cannot set it up on its own yet: it
+          needs a bridge or routing configuration, which is a bigger change than
+          a capture interface and dangerous to do half way. The wiring steps are
+          listed at the end.
+        </p>
+      }
+      <div class="actions">
+        <button class="btn btn-primary" (click)="toStep(2)">Choose interfaces</button>
+      </div>
+    </div>
+  }
+}
+
+<!-- Step 2: which interface plays which part -->
+@if (step() === 2 && profile(); as item) {
+  <div class="card">
+    <div class="card-title">{{ item.name }}</div>
+    <div class="assign">
+      <div class="assign-map">
+        <topology-diagram [profile]="item.id" [assignments]="roles()" />
+      </div>
+
+      <div class="assign-form">
+        @for (role of item.roles; track role.id) {
+          <label>
+            <span>{{ role.label }}</span>
+            <select (change)="setRole(role.id, $any($event.target).value)">
+              <!-- A select with no empty entry shows its first option whatever
+                   the model holds, so a role the wizard could not fill - one
+                   wired port and two to place - looked assigned and was
+                   refused on save as "no interface chosen". The entry is a
+                   prompt, though, not a choice: disabled and hidden, it shows
+                   in the closed field while nothing is assigned and never in
+                   the list, where picking it only led to that same refusal. -->
+              <option value="" disabled hidden [selected]="!roles()[role.id]">Choose an interface</option>
+              @for (link of candidates(); track link.name) {
+                <option [value]="link.name" [selected]="roles()[role.id] === link.name">
+                  {{ label(link) }}
+                </option>
+              }
+            </select>
+          </label>
+        }
+
+        @if (state(); as loaded) {
+          <p class="hint">
+            This browser is reaching the panel through
+            <strong>{{ loaded.hardware.management }}</strong>.
+          </p>
+        }
+      </div>
+    </div>
+
+    @for (note of warnings(); track $index) {
+      <p class="banner warn">{{ note }}</p>
+    }
+
+    <div class="actions">
+      <button class="btn" (click)="toStep(1)">Back</button>
+      <button class="btn btn-primary" (click)="save()" [disabled]="busy()" [attr.aria-busy]="(busy()) || null">
+        {{ busy() ? 'Saving...' : 'Save and continue' }}
+      </button>
+    </div>
+  </div>
+}
+
+<!-- Step 3: what counts as inside -->
+@if (step() === 3 && profile(); as item) {
+  <div class="card">
+    <div class="card-title">Home networks</div>
+    <div class="assign">
+      <div class="assign-form">
+        <label>
+          <span>One network per line, in CIDR form</span>
+          <textarea rows="5" [(ngModel)]="homeNet" name="homeNet" spellcheck="false"
+                    placeholder="192.168.1.0/24&#10;10.10.20.0/24"></textarea>
+        </label>
+        <p class="hint">
+          Detected from this machine's own addresses. Add the rest by hand.
+        </p>
+      </div>
+
+      <div class="assign-form">
+        <p class="hint">
+          Most rules in the signature set are directional: they only fire when
+          one end of the conversation is inside <strong>HOME_NET</strong>. Get
+          this wrong and the signatures still load, still count as active, and
+          never match anything.
+        </p>
+        @if (!item.capture_has_address) {
+          <p class="hint">
+            This layout gives the capture interface no address of its own, so the
+            panel cannot work the networks out by itself. A mirror port also
+            carries VLANs this device is not on, and those have to be typed in
+            or their traffic is treated as coming from the internet.
+          </p>
+        }
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" (click)="toStep(2)">Back</button>
+      <button class="btn btn-primary" (click)="toStep(4)"
+              [disabled]="!homeNetList().length">Continue</button>
+    </div>
+  </div>
+}
+
+<!-- Step 4: put it into effect -->
+@if (step() === 4 && profile(); as item) {
+  <div class="card">
+    <div class="card-title">Apply</div>
+
+    <div class="assign">
+      <div class="assign-map">
+        <topology-diagram [profile]="item.id" [assignments]="roles()" />
+      </div>
+      <div class="assign-form">
+        <dl class="recap">
+          <dt>Layout</dt><dd>{{ item.name }}</dd>
+          <dt>Capture</dt><dd class="mono">{{ captureIface() || 'not set' }}</dd>
+          <dt>Home networks</dt>
+          <dd class="mono">{{ homeNetList().join(', ') }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- What has to be true outside this device before applying is worth doing.
+         The panel cannot check any of it, so it says it plainly instead. -->
+    <div class="card-title net-title">Before you apply</div>
+    <ol class="todo">
+      @for (line of item.steps; track $index) {
+        <li>{{ line }}</li>
+      }
+    </ol>
+
+    @for (note of warnings(); track $index) {
+      <p class="banner warn">{{ note }}</p>
+    }
+
+    @if (item.can_apply) {
+      @if (item.id === 'bridge') {
+        <p class="banner warn">
+          This builds a bridge across the two interfaces and hands the link to
+          it, which is a change to your network and not only to a configuration
+          file. It survives a reboot. The engine configuration is written and
+          checked first: if the engine refuses it, nothing on the network is
+          touched. If a later step fails, the bridge stays and keeps carrying the
+          link, because a bridge pulled out from under a cable that is already
+          plugged in is a dead link, and the step is reported as failed.
+          If this would leave the panel unreachable the change is refused before
+          anything is touched.
+        </p>
+      } @else {
+        <p class="banner">
+          This writes the capture interface and the home networks into the engine
+          configuration, checks it, and restarts the engine. A configuration the
+          engine refuses is rolled back, and if this would leave the panel
+          unreachable the change is refused before anything is touched.
+        </p>
+        @if (!item.capture_has_address) {
+          <p class="banner warn">
+            The capture interface loses its address and stays that way: the panel
+            installs a rule that sets it up again after every reboot. It has no
+            button to give it back. That is
+            <code>sudo rapi-capture-iface &lt;name&gt; restore</code> on the device.
+          </p>
+        }
+      }
+    } @else {
+      <p class="banner warn">
+        The panel cannot set this layout up on its own. Follow the steps above;
+        the choice stays recorded.
+      </p>
+    }
+
+    @if (applyResult(); as result) {
+      <div class="steps-result">
+        @for (line of result.steps; track $index) {
+          <div class="step-line" [class.bad]="!line.ok">
+            <span class="dot" [class.on]="line.ok" [class.off]="!line.ok"></span>
+            <span>{{ line.step }}</span>
+            @if (!line.ok) { <code>{{ line.output }}</code> }
+          </div>
+        }
+      </div>
+    }
+
+    <div class="actions">
+      <button class="btn" (click)="toStep(3)">Back</button>
+      @if (item.can_apply) {
+        <button class="btn btn-primary" (click)="applyLayout()" [disabled]="busy()" [attr.aria-busy]="(busy()) || null">
+          {{ busy() ? 'Applying...' : 'Apply and restart the engine' }}
+        </button>
+      } @else {
+        <button class="btn btn-primary" (click)="toStep(5)">Continue</button>
+      }
+    </div>
+    @if (busy()) {
+      <!-- Up to a minute with nothing else moving on the page, which reads as
+           a hang without a word about it. -->
+      <p class="wait-note" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        Please wait. The engine configuration is written, checked and the engine
+        restarts; this can take up to a minute. Leave this page open.
+      </p>
+    }
+  </div>
+}
+
+<!-- Step 5: applied. There used to be a 12-second listen here, with its own
+     listener rather than the engine. It proved less than the engine's
+     counters already show on the IDS screen, and a quiet network made a
+     working mirror look broken, so it was removed. -->
+@if (step() === 5 && profile(); as item) {
+  <div class="card">
+    <div class="card-title">Done</div>
+    <p class="hint done-hint">
+      The layout is applied and the engine listens on
+      <span class="mono">{{ captureIface() }}</span>. Whether traffic reaches it,
+      and whether it keeps up, shows on the IDS screen: the packet counters grow
+      while traffic flows and capture loss stays near zero.
+    </p>
+    <div class="actions">
+      <button class="btn" (click)="toStep(1)">Change layout</button>
+      <button class="btn btn-primary" (click)="done()">Go to the dashboard</button>
+    </div>
+  </div>
+}

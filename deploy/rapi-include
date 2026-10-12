@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Keep every generated configuration file in one include list. Installed
+# root-owned; the panel never calls it, so it needs no sudoers entry.
+#
+#   rapi-include
+#
+# Four files are generated here now - the log directory, the capture interface,
+# the home networks and the outputs - and each used to append its own
+# `include:` line. The engine says what it thinks of that:
+#
+#   Warning: conf-yaml-loader: Multipline "include" fields at the same level
+#   are deprecated and will not work in Suricata 8, please move to an array of
+#   include files
+#
+# It still works in 8.0.6, so this is a warning rather than a fault, but it is
+# a promise about a version that is already here. One array, rebuilt from
+# whichever rapi-*.yaml files exist, which also means a file removed by a
+# rollback stops being included without anybody editing a list.
+#
+# Order does not matter: each generated file owns one top-level key and no two
+# own the same one. What does matter is that the block stays last, because a
+# later include wins over the packaged value it replaces.
+set -euo pipefail
+
+YAML="${RAPI_SURICATA_YAML:-/etc/suricata/suricata.yaml}"
+CONF_DIR="${RAPI_SURICATA_CONF_DIR:-/etc/suricata}"
+MARKER="# --- RaPi IDS Panel: generated configuration (must stay last) ---"
+
+die() { echo "$1" >&2; exit 1; }
+
+[[ -f "$YAML" ]] || die "cannot find $YAML"
+
+FILES=()
+for candidate in "$CONF_DIR"/rapi-*.yaml; do
+  [[ -f "$candidate" ]] && FILES+=("$candidate")
+done
+[[ ${#FILES[@]} -gt 0 ]] || die "no generated files in $CONF_DIR - nothing to include"
+
+# Everything of ours comes out first: the single-line includes from before this
+# script existed, their comments, and any block a previous run left. Then one
+# block goes back on the end. Lines belonging to the packaged file are matched
+# by neither pattern and are not touched.
+awk -v dir="$CONF_DIR" '
+  # An entry of our own block: "  - /etc/suricata/rapi-x.yaml".
+  $0 ~ ("^[[:space:]]+- " dir "/rapi-[^ ]*\\.yaml[[:space:]]*$") { next }
+  # A single-line include of one of our files.
+  $0 ~ ("^[[:space:]]*include:[[:space:]]*" dir "/rapi-[^ ]*\\.yaml[[:space:]]*$") { next }
+  # Our comments, and the bare "include:" that opened our block.
+  /^# --- RaPi IDS Panel:/ { skip_blank = 1; next }
+  /^include:[[:space:]]*$/ { next }
+  { print }
+' "$YAML" > "${YAML}.rapi-include-new"
+
+# Collapse the run of blank lines the removals leave behind, so re-running this
+# does not walk the file down the page one empty line at a time.
+awk 'NF == 0 { blank++; next } { while (blank-- > 0) print ""; blank = 0; print }' \
+  "${YAML}.rapi-include-new" > "${YAML}.rapi-include-trimmed"
+mv "${YAML}.rapi-include-trimmed" "${YAML}.rapi-include-new"
+
+{
+  echo
+  echo "$MARKER"
+  echo "include:"
+  for file in "${FILES[@]}"; do
+    echo "  - $file"
+  done
+} >> "${YAML}.rapi-include-new"
+
+mv "${YAML}.rapi-include-new" "$YAML"
+chmod 0644 "$YAML"
+echo "ok included ${#FILES[@]} generated files"

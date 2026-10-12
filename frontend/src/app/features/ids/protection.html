@@ -1,0 +1,297 @@
+@if (loading() && !data()) {
+  <div class="card empty">Checking the signature set...</div>
+}
+
+@if (data(); as p) {
+  <div class="prot-top">
+    <section class="card sig-card">
+      <div class="card-title">Signatures in total</div>
+      <div class="sig-value">{{ p.signatures.total | num }}</div>
+      <div class="sig-active">{{ p.signatures.active | num }} active</div>
+      <div class="sig-meta">
+        @if (p.built_at) {
+          Built {{ p.built_at | datetime }}
+          <span class="dim">&middot; downloaded {{ p.fetched_at | datetime }}</span>
+        } @else {
+          Rebuilt {{ p.updated_at | datetime }}
+        }
+        <span class="dim">&middot; {{ p.source }}</span>
+      </div>
+      <button class="btn btn-sm" (click)="updateSignatures()" [disabled]="!!busy()" [attr.aria-busy]="(busy() === 'update') || null">
+        {{ busy() === 'update' ? 'Downloading...' : 'Update signatures' }}
+      </button>
+    </section>
+
+    <section class="card">
+      <div class="card-title">Detection mode</div>
+      <!-- Buttons only where the panel can actually carry the choice out.
+           Where it cannot, the same two words stay on screen as a statement of
+           what the engine is doing, which is what they were before. -->
+      @if (p.mode.can_switch) {
+        <div class="mode-switch" role="group" aria-label="Detection mode">
+          <button type="button" class="mode-opt" [class.active]="p.mode.id === 'ids'"
+                  [disabled]="!!busy()" (click)="setMode(false)">Detection</button>
+          <!-- Off where it would blind the engine instead of protecting
+               anything. Detection stays open, so a device switched before
+               this rule can always leave. -->
+          <button type="button" class="mode-opt" [class.active]="p.mode.id === 'ips'"
+                  [disabled]="!!busy() || (!p.mode.blocking_possible && p.mode.id !== 'ips')"
+                  [attr.title]="p.mode.blocking_unavailable || null"
+                  (click)="setMode(true)">Detection and blocking</button>
+        </div>
+
+      } @else {
+        <div class="mode-switch" role="group" aria-label="Detection mode">
+          <span class="mode-opt" [class.active]="p.mode.id === 'ids'">Detection</span>
+          <span class="mode-opt" [class.active]="p.mode.id === 'ips'">Detection and blocking</span>
+        </div>
+      }
+      @if (busy() === 'mode') {
+        <p class="mode-working" role="status">
+          <span class="spinner" aria-hidden="true"></span>
+          @if (rebuildingFirst()) {
+            Rebuilding the rule set first, then switching.
+          } @else {
+            Switching.
+          }
+          The engine restarts and the live stream drops and comes back on its
+          own. The amber state in the header while that happens is the restart,
+          not a fault. Leave this page open.
+        </p>
+      }
+      @if (modeMessage(); as msg) {
+        <p class="banner mode-result" [class.danger]="!msg.ok" role="status">{{ msg.text }}</p>
+      }
+      <p class="mode-why">{{ p.mode.reason }}</p>
+      <!-- Keyed on what the running rule set lacks, not on a count of drops.
+           The vendor set ships one drop rule, so a count is never zero, and a
+           panel upgraded from before the policy runs with that one rule while
+           every category on this screen reads as blocking. -->
+      @if (p.mode.id === 'ips' && p.mode.drop_pending > 0) {
+        <div class="mode-warn">
+          <p>Blocking is on, but {{ p.mode.drop_pending | num }} signatures do not
+            follow the enabled categories yet: ones that should block only alert,
+            or ones that would block without an alert. The panel rebuilds the
+            rule set on its own within ten minutes. If this is still here after
+            that, its rebuild failed, and this button shows why.</p>
+          <button class="btn btn-sm" (click)="rebuild()" [disabled]="!!busy()" [attr.aria-busy]="(busy() === 'rebuild') || null">
+            {{ busy() === 'rebuild' ? 'Rebuilding rules...' : 'Rebuild the rule set' }}
+          </button>
+        </div>
+      }
+      <!-- The sentence above ends at "that is a topology decision". This is the
+           link to the screen where that decision is made. -->
+      <a routerLink="/setup" class="mode-link">How this Pi is connected &rarr;</a>
+
+      <div class="card-title net-title">Capture interfaces</div>
+      @if (p.mode.interfaces.length) {
+        <div class="row-wrap">
+          @for (iface of p.mode.interfaces; track iface) {
+            <span class="pill">{{ iface }}</span>
+          }
+          <span class="dim">capture: {{ p.mode.capture }}</span>
+        </div>
+      } @else {
+        <p class="dim">No monitored interfaces found in the engine configuration.</p>
+      }
+    </section>
+  </div>
+
+  @if (!p.applied) {
+    <div class="card warn-card">
+      Your category selection is saved, but the rule set could not be rebuilt.
+      The engine is still running on the previous set. Try saving again.
+    </div>
+  }
+
+  <section class="card">
+    <div class="card-title">
+      <span>Active detections</span>
+      <span class="dim">{{ activeCategories() }} of {{ p.categories.length }}</span>
+    </div>
+    <p class="dim intro">
+      An enabled category detects, and in Detection and blocking mode it also
+      blocks. Categories marked <b>alerts only</b> never block, and neither do
+      the engine's own protocol events counted under protocol vulnerabilities:
+      they record ordinary traffic that looks odd, and blocking them would cut
+      ordinary connections.
+    </p>
+
+    <ul class="cats">
+      @for (cat of p.categories; track cat.id) {
+        <li class="cat" [class.off]="!draft()[cat.id]">
+          <button type="button" class="switch" role="switch"
+                  [attr.aria-checked]="draft()[cat.id]" [attr.aria-label]="cat.name"
+                  [class.on]="draft()[cat.id]"
+                  [disabled]="cat.locked || !!busy()" (click)="toggle(cat)">
+            <span class="knob"></span>
+          </button>
+
+          <div class="cat-text">
+            <div class="cat-name">
+              {{ cat.name }}
+              @if (cat.locked) { <span class="pill">always on</span> }
+              @if (cat.alert_only) { <span class="pill pill-alert-only">alerts only</span> }
+              @if (!cat.locked && draft()[cat.id] !== cat.enabled) {
+                <span class="pill pill-change">{{ draft()[cat.id] ? 'to enable' : 'to disable' }}</span>
+              }
+            </div>
+            <div class="cat-desc">{{ cat.description }}</div>
+          </div>
+
+          <div class="cat-count">
+            <span class="count">{{ cat.active_signatures | num }}</span>
+            <span class="count-total">of {{ cat.signatures | num }} signatures</span>
+          </div>
+        </li>
+      }
+
+      <!-- Rendered with the categories and saved by the same button, but set
+           apart: the categories come from the rule name, this comes from the
+           rule set's own rating of itself, so a signature can be in one
+           category and informational at the same time. Adding this count to
+           the ones above would double-count. -->
+      <li class="cat cat-rating" [class.off]="!informational()">
+        <button type="button" class="switch" role="switch"
+                [attr.aria-checked]="informational()"
+                aria-label="Informational signatures"
+                [class.on]="informational()"
+                [disabled]="!!busy()" (click)="toggleInformational()">
+          <span class="knob"></span>
+        </button>
+
+        <div class="cat-text">
+          <div class="cat-name">
+            Informational signatures
+            @if (informational() !== p.informational.enabled) {
+              <span class="pill pill-change">
+                {{ informational() ? 'to enable' : 'to disable' }}
+              </span>
+            }
+          </div>
+          <div class="cat-desc">
+            Rules that report ordinary activity, not threats: STUN, DNS
+            lookups, common User-Agents.
+          </div>
+
+          @if (informationalImpact().length) {
+            <!-- The cut is nowhere near uniform: it takes 92 % of the
+                 reputation category, almost all of Tor and file sharing, and
+                 0.5 % of malware. Without this the switch quietly empties
+                 categories the operator deliberately left switched on. Names
+                 only: the percentages were three numbers to read for one
+                 fact, that these categories go mostly quiet. Semicolons,
+                 because the names carry commas and "and" of their own. -->
+            <div class="cat-cost">
+              Turning this off also removes most rules in:
+              @for (c of informationalImpact(); track c.name) {
+                {{ c.name }}{{ $last ? '.' : ';' }}
+              }
+            </div>
+          }
+
+          <!-- The measured shape of the problem: on this network seven
+               signatures made 95 % of every alert ever recorded, and this
+               switch drops fourteen thousand rules to deal with them. So the
+               narrower tool has to be named here, where somebody is about to
+               reach for the wide one. -->
+          <div class="cat-alt">
+            Too noisy? Silence single signatures from the
+            <a routerLink="/ids" [queryParams]="{ tab: 'alerts' }">alert list</a>
+            instead.
+          </div>
+        </div>
+
+        <div class="cat-count">
+          <span class="count">{{ p.informational.active_signatures | num }}</span>
+          <span class="count-total">of {{ p.informational.signatures | num }} signatures</span>
+        </div>
+      </li>
+    </ul>
+
+    <footer class="cat-foot">
+      @if (pendingCount() > 0) {
+        <button class="btn btn-primary" (click)="save()" [disabled]="!!busy()" [attr.aria-busy]="(busy() === 'save') || null">
+          {{ busy() === 'save' ? 'Rebuilding rules...' : 'Save changes (' + pendingCount() + ')' }}
+        </button>
+        <button class="btn" (click)="revert()" [disabled]="!!busy()">Cancel</button>
+        <span class="dim">Rebuilding the rule set takes about half a minute.</span>
+      } @else {
+        <span class="dim">
+          Flip a category to change what gets detected. Changes are saved with the button.
+        </span>
+      }
+    </footer>
+  </section>
+
+  <!-- Rendered even when the list is empty. It used to appear only once
+       something had been silenced, so the one mechanism that deals with a noisy
+       signature without touching anything else was invisible to everybody who
+       had not already found it. -->
+  <section class="card">
+    <div class="card-title">
+      <span>Silenced signatures</span>
+      <span class="dim">{{ p.muted.length }}</span>
+    </div>
+    <p class="dim intro">
+      Dropped from the rule set one by one: open an alert in the
+      <a routerLink="/ids" [queryParams]="{ tab: 'alerts' }">alert list</a> and
+      silence the signature behind it. The rule stops being compiled, so it
+      costs the engine nothing, and it stays out after signature updates.
+      This is the narrowest way to deal with a signature that repeats, and it
+      leaves every other rule alone.
+    </p>
+    @if (p.muted.length) {
+      <ul class="muted-list">
+        @for (m of p.muted; track m.signature_id) {
+          <li class="muted-item">
+            <div class="muted-text">
+              <div class="muted-name">{{ m.signature || '(name not in the rule set)' }}</div>
+              <div class="dim mono">SID {{ m.signature_id }}</div>
+            </div>
+            <button class="btn btn-sm" (click)="unmute(m)" [disabled]="!!busy()" [attr.aria-busy]="(busy() === 'unmute' + m.signature_id) || null">
+              {{ busy() === 'unmute' + m.signature_id ? 'Rebuilding...' : 'Alert again' }}
+            </button>
+          </li>
+        }
+      </ul>
+    } @else {
+      <p class="empty-inline">Nothing is silenced.</p>
+    }
+  </section>
+
+  <section class="card">
+    <div class="card-title">
+      <span>Allowed signatures</span>
+      <span class="dim">{{ p.allowed.length }}</span>
+    </div>
+    <p class="dim intro">
+      Alerted and never blocked: open an alert in the
+      <a routerLink="/ids" [queryParams]="{ tab: 'alerts' }">alert list</a> and
+      allow the signature behind it. For a signature that matches something you
+      want on the network, such as a remote access tool. Every other signature
+      in its category still blocks.
+    </p>
+    @if (p.allowed.length) {
+      <ul class="muted-list">
+        @for (m of p.allowed; track m.signature_id) {
+          <li class="muted-item">
+            <div class="muted-text">
+              <div class="muted-name">{{ m.signature || '(name not in the rule set)' }}</div>
+              <div class="dim mono">SID {{ m.signature_id }}</div>
+            </div>
+            <button class="btn btn-sm" (click)="unallow(m)" [disabled]="!!busy()" [attr.aria-busy]="(busy() === 'unallow' + m.signature_id) || null">
+              {{ busy() === 'unallow' + m.signature_id ? 'Rebuilding...' : 'Block again' }}
+            </button>
+          </li>
+        }
+      </ul>
+    } @else {
+      <p class="empty-inline">Nothing is allowed.</p>
+    }
+  </section>
+
+  @if (message(); as msg) {
+    <div class="card" [class.error-card]="!msg.ok" [class.ok-card]="msg.ok">{{ msg.text }}</div>
+  }
+}

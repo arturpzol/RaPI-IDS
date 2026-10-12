@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh IDS signatures (RaPi IDS Panel)
+Documentation=man:suricata-update(1)
+# Rules come from the network. Starting before it is up means one failed run a
+# day, on the one day that matters - the first boot in a new place.
+After=network-online.target suricata.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rapi-rules-update @DISABLE_CONF@ @DROP_CONF@
+# A rule download over a slow uplink plus a rebuild of 68 000 rules on a Pi.
+# Measured here at about 90 seconds; this is generous rather than tight,
+# because being killed halfway is how a rule file gets truncated.
+TimeoutStartSec=1800

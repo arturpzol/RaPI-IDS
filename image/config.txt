@@ -1,0 +1,29 @@
+# Firmware configuration for the RaPi IDS appliance (Raspberry Pi 5).
+# Only what a headless sensor needs. See http://rptl.io/configtxt
+
+[all]
+# 64-bit kernel, and let the firmware load the initramfs the kernel package
+# builds. Without auto_initramfs the board boots to a kernel with no root.
+arm_64bit=1
+auto_initramfs=1
+
+# The kernel sets up the display, not the firmware.
+disable_fw_kms_setup=1
+disable_overscan=1
+
+# HDMI stays enabled on purpose. The device is headless in normal use, but when
+# it does not come up at a site with no serial cable, a screen is the only way
+# to see why.
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+
+# Full clocks where the board allows it. A mirror port can hand the engine more
+# packets than it can inspect, and a throttled sensor drops them silently.
+arm_boost=1
+
+# Deliberately absent: dtparam=audio, camera_auto_detect, display_auto_detect.
+# Each loads a driver for hardware this device does not have.
+
+[pi5]
+# The onboard SPI10 pins are wired to the RTC/fan header on the Pi 5.
+dtoverlay=nospi10

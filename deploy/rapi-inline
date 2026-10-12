@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# Put an inline link into one of its two modes. Installed root-owned and called
+# by the panel over sudo.
+#
+#   rapi-inline bridge <a> <b> <home-net>   the kernel forwards, the engine reads a copy
+#   rapi-inline pair   <a> <b> <home-net>   the engine forwards, and drops what it is told
+#
+# Why one helper and not a sequence driven from the panel. The swap touches six
+# things that belong to four other helpers: the engine configuration, the
+# queue's drop-in, NetworkManager's hold on each port, the kernel bridge, the
+# offloads on each port, and the engine process. Written as transitions from
+# the panel, every review of it found another state nobody had handled, because
+# the number of states is the number of ways those six can disagree. So this
+# does not move from one state to another. It drives all six to the target, in
+# one order that is safe from anywhere, in one process that a panel dying
+# halfway through cannot interrupt.
+#
+# The order, and what each step buys:
+#
+#   1. The engine configuration for the target is written and verified first,
+#      with suricata -T, while nothing on the wire has changed. The engine
+#      accepts a configuration naming an interface that does not exist yet
+#      (verified on this image: br-rapi before it is built), so this works for
+#      both targets. A refused configuration is rolled back by the helper that
+#      wrote it, and this exits: nothing to undo, because nothing was done.
+#
+#   2. The queue's drop-in goes, without a restart. An inline link never uses
+#      the queue: its rules are on the IP forward hook and bridged frames never
+#      reach it. rapi-ips-mode stays the only owner of those files.
+#
+#   3. The engine stops. From here on there is never more than one thing
+#      forwarding. Going to the pair, the kernel bridge still carries traffic
+#      until it is taken down. Coming back, the engine stopped before the bridge
+#      exists, so no frame ever reaches the other side twice.
+#
+#   4. The forwarding path is built for the target.
+#
+#   5. The engine starts, and is checked to be running.
+#
+# Stopping the engine is deliberately not something sudoers grants the panel:
+# anything that reached the panel's user could switch detection off with it.
+# This helper stops it only inside a swap, and every path out of it starts the
+# engine again, the failure path included.
+#
+# On a failure after step 3 the link is converged to the kernel bridge, which
+# forwards whether or not the engine is running. That is the documented choice
+# in rapi-ips-mode for a device posted to somebody else's network: a sensor
+# that stops inspecting is a smaller harm than a network that stops.
+#
+# Exit status: 0 the target is in place, 2 it failed and the bridge is carrying
+# the link, 1 it failed before anything changed or the link is down.
+set -euo pipefail
+
+SYS_NET="${RAPI_SYS_NET:-/sys/class/net}"
+CONF_DIR="${RAPI_NM_CONF_DIR:-/etc/NetworkManager/conf.d}"
+CAPTURE_APPLY="${RAPI_CAPTURE_APPLY_BIN:-/usr/local/sbin/rapi-capture-apply}"
+CAPTURE_IFACE="${RAPI_CAPTURE_IFACE_BIN:-/usr/local/sbin/rapi-capture-iface}"
+BRIDGE_BIN="${RAPI_BRIDGE_BIN:-/usr/local/sbin/rapi-bridge}"
+IPS_MODE="${RAPI_IPS_MODE_BIN:-/usr/local/sbin/rapi-ips-mode}"
+BR="br-rapi"
+
+# The same list as rapi-capture-iface and rapi-bridge: offloads that hand
+# merged or reassembled segments to userspace, so rules matching on sizes or
+# offsets would match frames the wire never carried.
+OFFLOADS=(gro lro tso gso rx-gro-hw rxvlan)
+
+die() { echo "$1" >&2; exit 1; }
+
+# What the helper that failed said about it. The first version of this script
+# sent every other helper's output to /dev/null and reported "the bridge could
+# not be built", and the one run that mattered, booting the image, left nothing
+# to say why. The reason travels to the operator with the failure now.
+LAST_ERROR=""
+quietly() {  # quietly <command...>: run it, keep what it said if it fails
+  local output
+  if output="$("$@" 2>&1)"; then
+    return 0
+  fi
+  # `|| true`: a helper that failed without a word gives grep nothing to keep,
+  # and under pipefail that would end this script here, silently, which is the
+  # very failure this function exists to report.
+  LAST_ERROR="$(printf '%s\n' "$output" | grep -v '^\s*$' | tail -n 3 || true)"
+  [[ -n "$LAST_ERROR" ]] || LAST_ERROR="$1 failed without saying why"
+  return 1
+}
+
+[[ $# -eq 4 ]] || die "usage: $0 bridge|pair <a> <b> <home-net>"
+MODE="$1"
+A="$2"
+B="$3"
+HOME_NET="$4"
+
+# --- validation: nothing is touched before all of it passes --------------------
+
+valid_name() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,15}$ ]]; }
+
+[[ "$MODE" == bridge || "$MODE" == pair ]] || die "not a mode: $MODE"
+valid_name "$A" || die "not an interface name: $A"
+valid_name "$B" || die "not an interface name: $B"
+[[ "$A" != "$B" ]] || die "the two inline interfaces have to differ"
+[[ -e "$SYS_NET/$A" ]] || die "no such interface: $A"
+[[ -e "$SYS_NET/$B" ]] || die "no such interface: $B"
+[[ "$HOME_NET" =~ ^\[[0-9a-fA-F:.,/]+\]$ ]] || die "not a network list: $HOME_NET"
+
+# Both modes take the address off both ports, so this is the one way this
+# helper could take the device off the network. Refused here, before step 1,
+# and not left to the bridge helper to discover in the middle of step 4.
+
+# Whether taking these two ports into the path would leave this device with no
+# way out. Not "does a member carry the default route": a member carrying one
+# is the normal case on a link that runs through this device, and the question
+# that matters is whether anything else still carries one.
+#
+# Measured here, on a live device: switching blocking off hands both ports back
+# to NetworkManager for a moment, one of them picks up a lease with a default
+# route, and the old check then refused to build the bridge. The ports were
+# already released, so the link carried nothing and the panel could not put it
+# back: a check meant to keep the device reachable had taken the network down.
+would_strand_us() {  # would_strand_us <member> <member>
+  local iface members=" $1 $2 " others=0 ours=0
+  while read -r iface; do
+    [[ -z "$iface" ]] && continue
+    if [[ "$members" == *" $iface "* ]]; then ours=1; else others=1; fi
+  done < <(ip -4 route show default 2>/dev/null | awk '{print $5}')
+  (( ours == 1 && others == 0 ))
+}
+
+if would_strand_us "$A" "$B"; then
+  die "the only default route runs through $A or $B: putting them in the path would take this device off the network. Reach the panel another way first, over Wi-Fi or a second port."
+fi
+
+# --- helpers --------------------------------------------------------------------
+
+mac_of() {
+  local address
+  address="$(cat "$SYS_NET/$1/address" 2>/dev/null || true)"
+  [[ "$address" == "00:00:00:00:00:00" ]] && address=""
+  printf '%s' "$address"
+}
+
+# Whether NetworkManager has been told to leave this card alone. By MAC as well
+# as by name: rapi-capture-iface matches the card by its address, because a USB
+# adapter's name moves between boots, so a file written as eth1 can be holding
+# the card that is eth2 today.
+held() {
+  local mac
+  [[ -f "$CONF_DIR/99-rapi-capture-$1.conf" ]] && return 0
+  mac="$(mac_of "$1")"
+  [[ -n "$mac" ]] || return 1
+  grep -qs "^match-device=mac:$mac\$" "$CONF_DIR"/99-rapi-capture-*.conf
+}
+
+prepare_link() {
+  ip link set "$1" up || return 1
+  ip link set "$1" promisc on || return 1
+  local feature
+  for feature in "${OFFLOADS[@]}"; do
+    ethtool -K "$1" "$feature" off >/dev/null 2>&1 || true
+  done
+}
+
+configure() {
+  if [[ "$1" == pair ]]; then
+    "$CAPTURE_APPLY" "$A" "$HOME_NET" "$B"
+  else
+    "$CAPTURE_APPLY" "$BR" "$HOME_NET"
+  fi
+}
+
+# Every step returns its own failure. `set -e` does not apply inside a function
+# called on the left of `||`, so without these a failing command would be
+# stepped over and the next one run on top of it.
+to_bridge() {
+  local member
+  for member in "$A" "$B"; do
+    if held "$member"; then
+      quietly "$CAPTURE_IFACE" "$member" restore || return 1
+    fi
+  done
+  quietly "$BRIDGE_BIN" "$BR" up "$A" "$B" || return 1
+  # rapi-bridge leaves early when the bridge is already there and never reaches
+  # its own offload loop, so the ports are prepared here whatever it said.
+  for member in "$A" "$B"; do
+    prepare_link "$member" || return 1
+  done
+  ip link set "$BR" promisc on || return 1
+}
+
+to_pair() {
+  local member
+  if [[ -e "$SYS_NET/$BR" ]]; then
+    quietly "$BRIDGE_BIN" "$BR" down || return 1
+  fi
+  for member in "$A" "$B"; do
+    quietly "$CAPTURE_IFACE" "$member" capture || return 1
+  done
+}
+
+fall_back() {
+  local reason="$1" ok=1 cause
+  cause="$LAST_ERROR"
+  set +e
+  configure bridge >/dev/null 2>&1 || ok=0
+  if (( ok )); then
+    to_bridge || ok=0
+  fi
+  # Started whatever happened above: every path out of this helper leaves the
+  # engine running, which is the condition stopping it was allowed on.
+  systemctl start suricata >/dev/null 2>&1 || ok=0
+  if (( ok )) && systemctl is-active --quiet suricata; then
+    echo "fallback bridge: $reason. The kernel bridge is carrying the link and the engine is reading a copy."
+    [[ -n "$cause" ]] && printf 'first cause:\n%s\n' "$cause"
+    exit 2
+  fi
+  echo "failed: the link is down: $reason, and the kernel bridge could not be put back" >&2
+  [[ -n "$cause" ]] && printf 'first cause:\n%s\n' "$cause" >&2
+  [[ -n "$LAST_ERROR" && "$LAST_ERROR" != "$cause" ]] \
+    && printf 'while putting the bridge back:\n%s\n' "$LAST_ERROR" >&2
+  exit 1
+}
+
+# --- 1. the configuration, verified, before anything else moves ----------------
+
+if ! output="$(configure "$MODE" 2>&1)"; then
+  printf '%s\n' "$output" >&2
+  die "the engine rejected the configuration for $MODE: nothing was changed"
+fi
+
+# --- 2. the queue out of the way, without a restart -----------------------------
+
+"$IPS_MODE" clear >/dev/null || die "the queue could not be cleared: nothing on the link was changed"
+
+# --- 3. one forwarder at a time from here ---------------------------------------
+
+systemctl stop suricata || fall_back "the engine would not stop"
+
+# --- 4. the forwarding path for the target --------------------------------------
+
+if [[ "$MODE" == pair ]]; then
+  to_pair || fall_back "the ports could not be handed to the engine"
+else
+  to_bridge || fall_back "the bridge could not be built"
+fi
+
+# --- 5. the engine back, and checked ---------------------------------------------
+
+systemctl start suricata || fall_back "the engine would not start"
+systemctl is-active --quiet suricata || fall_back "the engine is not running"
+if [[ "$MODE" == bridge ]]; then
+  for member in "$A" "$B"; do
+    [[ -e "$SYS_NET/$BR/brif/$member" ]] || fall_back "$member is not in the bridge"
+  done
+fi
+
+echo "ok $MODE $A,$B home_net=$HOME_NET"
