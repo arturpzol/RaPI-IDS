@@ -5,6 +5,10 @@ Documentation=man:suricata-update(1)
 # day, on the one day that matters - the first boot in a new place.
 After=network-online.target suricata.service
 Wants=network-online.target
+# Twelve tries, half an hour apart, then quiet until the next day's timer. The
+# window is shorter than a day, so that one is never refused.
+StartLimitIntervalSec=12h
+StartLimitBurst=12
 
 [Service]
 Type=oneshot
@@ -13,3 +17,14 @@ ExecStart=/usr/local/sbin/rapi-rules-update @DISABLE_CONF@ @DROP_CONF@
 # Measured here at about 90 seconds; this is generous rather than tight,
 # because being killed halfway is how a rule file gets truncated.
 TimeoutStartSec=1800
+# A failed fetch keeps the rules the engine has, and then waited for the next
+# night. On a router that switches its Wi-Fi off from midnight to half past
+# four, the whole timer window, that was every night for two weeks. A try every
+# half hour reaches past such a gap; suricata-update checks the checksum first,
+# so a try with nothing new costs one small request.
+Restart=on-failure
+RestartSec=30min
+# Exit 4 is new rules on disk and an engine that would not reload them.
+# Downloading again does not help with that: the next engine start reads them,
+# and so does the next night's run.
+RestartPreventExitStatus=4

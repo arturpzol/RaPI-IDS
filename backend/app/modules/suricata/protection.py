@@ -12,12 +12,15 @@ We never hand-edit the rules themselves.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
 import os
 import re
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -326,6 +329,31 @@ def source_dates() -> dict[str, float | None]:
     return dates
 
 
+# The daily timer fires between midnight and four, and a failed run tries again
+# every half hour for six hours. Two good runs can therefore be 28 hours apart,
+# and a night that needed every retry 34. Past this, the refresh is failing.
+FETCH_OVERDUE_AFTER = 36 * 3600
+
+
+def fetch_overdue(fetched: float | None, now: float | None = None) -> bool:
+    """True when the last download is older than the daily refresh allows.
+
+    The screen showed the download date and nothing else, so a device whose
+    timer failed every night read the same as one with nothing new to fetch.
+    Measured on 2026-10-28: fifteen nights in a row, each one inside the hours
+    a router switched its Wi-Fi off.
+
+    Taken from the download date rather than from the state of the unit:
+    systemd forgets a failed run at the next boot, and a reload that failed
+    after a good download is not a failed download. suricata-update touches the
+    archive when the vendor has published nothing new, so a quiet day does not
+    age it.
+    """
+    if fetched is None:
+        return False
+    return (time.time() if now is None else now) - fetched > FETCH_OVERDUE_AFTER
+
+
 def scan_rules(force: bool = False) -> RuleScan:
     """Count signatures in the merged rule file, split by category.
 
@@ -592,6 +620,46 @@ def rebuild_command(offline: bool) -> list[str]:
     return cmd
 
 
+# How long a rebuild from the panel waits for the daily refresh to finish.
+RULES_LOCK_WAIT = 120
+
+
+@contextlib.contextmanager
+def _rules_dir_lock(wait: float | None = None):
+    """The lock deploy/rapi-rules-update takes, on the rules directory itself.
+
+    _REBUILD_LOCK keeps this process to one suricata-update at a time; the
+    daily refresh is another process. Once a night that overlap was unlikely,
+    and with a retry every half hour it is not. Two runs writing the same
+    merged file and cache leave a rule set that is neither.
+
+    The directory rather than a lock file: it always exists, the panel can
+    open it without write access, and nobody has to create anything in a
+    shared directory first. Yields False when the refresh held it for longer
+    than the wait; no directory means nobody else to wait for.
+    """
+    wait = RULES_LOCK_WAIT if wait is None else wait
+    try:
+        fd = os.open(config.SURICATA_RULES_DIR, os.O_RDONLY)
+    except OSError:
+        yield True
+        return
+    try:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(1)
+        yield True
+    finally:
+        os.close(fd)
+
+
 def rebuild(offline: bool = True, timeout: int = 900) -> tuple[bool, str]:
     """Rebuild suricata.rules honouring the disabled categories."""
     # Both files have to exist before the tool is handed their paths: a fresh
@@ -604,12 +672,16 @@ def rebuild(offline: bool = True, timeout: int = 900) -> tuple[bool, str]:
         write_disable_conf(state)
         write_drop_conf(state)
     cmd = rebuild_command(offline)
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return False, f"the signature rebuild did not finish within {timeout}s"
-    except FileNotFoundError:
-        return False, "the signature update tool is missing"
+    with _rules_dir_lock() as held:
+        if not held:
+            return False, ("The daily signature update is running. Try again in a "
+                           "few minutes.")
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, f"the signature rebuild did not finish within {timeout}s"
+        except FileNotFoundError:
+            return False, "the signature update tool is missing"
     output = (proc.stdout + proc.stderr).strip()
     if proc.returncode != 0:
         if "sudo" in output and "password" in output.lower():
@@ -1475,6 +1547,7 @@ def snapshot() -> dict[str, Any]:
         "updated_at": scan.updated_at,
         "built_at": dates["built"],
         "fetched_at": dates["fetched"],
+        "fetch_overdue": fetch_overdue(dates["fetched"]),
         "source": "Emerging Threats Open",
         "applied": state["applied"],
         "applied_at": state["applied_at"],

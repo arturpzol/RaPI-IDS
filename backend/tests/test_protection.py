@@ -1,6 +1,7 @@
 """Detection categories, silenced signatures and the rule set rebuild."""
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -13,7 +14,7 @@ from app.modules.network import capture as network_capture
 from app.modules.network import topology as network_topology
 from app.modules.suricata import protection
 
-from .helpers import BackendTestCase, run_helper
+from .helpers import PROJECT_ROOT, BackendTestCase, run_helper
 
 RULES = b"""# comment line, not a rule
 alert tcp any any -> any any (msg:"ET MALWARE Something Bad"; sid:2000001; rev:1; metadata:signature_severity Major, created_at 2020_01_01;)
@@ -451,6 +452,92 @@ class SourceDateTest(BackendTestCase):
         protection._scan_cache = None
         protection._source_cache = None
         self.assertEqual(protection.source_dates()["built"], 1788381900.0)
+
+
+class FetchOverdueTest(BackendTestCase):
+    """The daily refresh not arriving, said on the screen that dates the rules.
+
+    Fifteen nights in a row the timer ran while the router had its Wi-Fi off,
+    and the screen showed a download date and nothing else - the same as a
+    device with nothing new to fetch.
+    """
+
+    NOW = 1793200000.0
+
+    def test_two_weeks_without_a_download_is_overdue(self):
+        self.assertTrue(protection.fetch_overdue(self.NOW - 14 * 86400, self.NOW))
+
+    def test_the_widest_normal_gap_is_not(self):
+        # Midnight one day, four the next, and a night that needed every retry.
+        self.assertFalse(protection.fetch_overdue(self.NOW - 34 * 3600, self.NOW))
+
+    def test_an_unknown_date_is_not_a_warning(self):
+        # No helper installed, or no archive yet: the screen says "Rebuilt".
+        self.assertFalse(protection.fetch_overdue(None, self.NOW))
+
+    def test_the_screen_is_handed_it(self):
+        with patch.object(protection, "source_dates",
+                          return_value={"built": 1.0, "fetched": 2.0}):
+            self.assertTrue(protection.snapshot()["fetch_overdue"])
+
+
+class RulesDirLockTest(BackendTestCase):
+    """The panel and the daily refresh take turns at suricata-update.
+
+    Both write the same merged file and cache, and with a retry every half hour
+    the refresh is running far more often than once a night.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.rules_dir = self.tmp / "rules"
+        self.rules_dir.mkdir()
+        self.enterContext(patch.object(config, "SURICATA_RULES_DIR", self.rules_dir))
+        self.enterContext(patch.object(protection, "RULES_LOCK_WAIT", 0))
+        for path in (protection.DISABLE_CONF, protection.DROP_CONF):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text("")
+                self.addCleanup(path.unlink, True)
+
+    def hold(self):
+        # A second open file description, as the helper's flock would be.
+        fd = os.open(self.rules_dir, os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def test_a_rebuild_waits_its_turn_and_does_not_run_beside_the_refresh(self):
+        self.hold()
+        with patch.object(protection.subprocess, "run") as run:
+            ok, said = protection.rebuild(offline=False)
+        self.assertFalse(ok)
+        self.assertIn("daily signature update is running", said)
+        run.assert_not_called()
+
+    def test_a_free_lock_lets_the_rebuild_run(self):
+        with patch.object(protection.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 0, "", "")) as run, \
+             patch.object(protection, "scan_rules"):
+            ok, _ = protection.rebuild(offline=True)
+        self.assertTrue(ok)
+        run.assert_called_once()
+
+    def test_the_helper_takes_the_same_lock(self):
+        self.hold()
+        conf = self.tmp / "x.conf"
+        conf.write_text("")
+        fake = self.tmp / "bin"
+        fake.mkdir()
+        marker = self.tmp / "ran"
+        (fake / "suricata-update").write_text(f"#!/bin/sh\ntouch {marker}\n")
+        (fake / "suricata-update").chmod(0o755)
+        result = subprocess.run(
+            ["bash", str(PROJECT_ROOT / "deploy" / "rapi-rules-update"), str(conf), str(conf)],
+            env={**os.environ, "PATH": f"{fake}:{os.environ['PATH']}",
+                 "RAPI_RULES_DIR": str(self.rules_dir), "RAPI_LOCK_WAIT": "0"},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertFalse(marker.exists())
 
 
 class InformationalTest(BackendTestCase):

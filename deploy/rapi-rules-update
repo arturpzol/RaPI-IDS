@@ -26,6 +26,18 @@ DROP_CONF="${2:-}"
 [[ -f "$DISABLE_CONF" ]] || { echo "no disable.conf at $DISABLE_CONF" >&2; exit 3; }
 [[ -f "$DROP_CONF" ]] || { echo "no drop.conf at $DROP_CONF" >&2; exit 3; }
 
+# One suricata-update at a time across the panel and this script: both write
+# the same merged file and cache. The lock is the rules directory itself, which
+# the panel takes too (protection._rules_dir_lock). The panel holds it for a
+# rebuild of a minute or two; waiting is cheaper than a failed night.
+RULES_DIR="${RAPI_RULES_DIR:-/var/lib/suricata/rules}"
+mkdir -p "$RULES_DIR"
+exec 9<"$RULES_DIR"
+if ! flock -w "${RAPI_LOCK_WAIT:-900}" 9; then
+  echo "another signature update is still running - try again later" >&2
+  exit 5
+fi
+
 # --fail because without it a download that does not arrive is not an error:
 # the tool writes the rules that ship with the engine, 445 of them, and exits
 # 0. That happened here on 2026-10-10, the night after the engine went from

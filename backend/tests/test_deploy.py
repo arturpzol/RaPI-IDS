@@ -2763,7 +2763,8 @@ class RulesUpdateTest(BackendTestCase):
             conf.write_text("")
             result = subprocess.run(
                 ["bash", str(DEPLOY / "rapi-rules-update"), str(conf), str(conf)],
-                env={**os.environ, "PATH": f"{tmp}:{os.environ['PATH']}"},
+                env={**os.environ, "PATH": f"{tmp}:{os.environ['PATH']}",
+                     "RAPI_RULES_DIR": tmp},
                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("keeps the rules it has", result.stderr)
@@ -2790,6 +2791,35 @@ class RulesUpdateTest(BackendTestCase):
         match = re.search(r"TimeoutStartSec=(\d+)", self.UNIT)
         self.assertIsNotNone(match)
         self.assertGreaterEqual(int(match.group(1)), 900)
+
+    def _seconds(self, key: str) -> int:
+        match = re.search(rf"^{key}=(\d+)(min|h)?$", self.UNIT, re.M)
+        self.assertIsNotNone(match, key)
+        return int(match.group(1)) * {"min": 60, "h": 3600, None: 1}[match.group(2)]
+
+    def test_a_failed_run_is_tried_again(self):
+        # One try a night, and a router with its Wi-Fi off from midnight to
+        # half past four turned that into no update for two weeks.
+        self.assertIn("Restart=on-failure", self.UNIT)
+
+    def test_a_reload_that_failed_is_not_downloaded_again(self):
+        # Exit 4 is new rules on disk and an engine that would not read them.
+        # Retried, that was twelve rebuilds of 68 000 rules for a problem no
+        # download can fix.
+        self.assertIn("RestartPreventExitStatus=4", self.UNIT)
+        self.assertIn("exit 4", (DEPLOY / "rapi-rules-update").read_text())
+
+    def test_the_tries_reach_past_a_night_without_network(self):
+        burst = int(re.search(r"^StartLimitBurst=(\d+)$", self.UNIT, re.M).group(1))
+        self.assertGreaterEqual(burst * self._seconds("RestartSec"), 5 * 3600)
+
+    def test_the_tries_stop_and_the_next_day_is_not_refused(self):
+        # A burst that fits inside the window is what makes the limit trip at
+        # all; a window under a day is what lets tomorrow's timer start.
+        burst = int(re.search(r"^StartLimitBurst=(\d+)$", self.UNIT, re.M).group(1))
+        window = self._seconds("StartLimitIntervalSec")
+        self.assertLessEqual(burst * self._seconds("RestartSec"), window)
+        self.assertLess(window, 24 * 3600 - 4 * 3600)
 
     def test_a_missed_day_is_caught_up(self):
         # The sensor is not expected to be switched on at any given hour, and a

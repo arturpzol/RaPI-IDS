@@ -17,6 +17,12 @@
         }
         <span class="dim">&middot; {{ p.source }}</span>
       </div>
+      @if (p.fetch_overdue && p.fetched_at) {
+        <div class="sig-failed" role="status">
+          No download since {{ p.fetched_at | datetime }}. The automatic update
+          runs at night; check that the Pi can reach the internet then.
+        </div>
+      }
       <button class="btn btn-sm" (click)="updateSignatures()" [disabled]="!!busy()" [attr.aria-busy]="(busy() === 'update') || null">
         {{ busy() === 'update' ? 'Downloading...' : 'Update signatures' }}
       </button>

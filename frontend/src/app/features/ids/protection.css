@@ -37,6 +37,12 @@
   font-size: 0.78rem;
 }
 
+.sig-failed {
+  margin-bottom: 0.5rem;
+  color: var(--warn);
+  font-size: 0.78rem;
+}
+
 /* --- operating mode --- */
 
 .mode-switch {

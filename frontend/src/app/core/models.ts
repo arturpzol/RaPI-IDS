@@ -310,6 +310,8 @@ export interface Protection {
   built_at: number | null;
   /** Unix seconds. When this device downloaded it. */
   fetched_at: number | null;
+  /** The last download is older than the daily refresh allows. */
+  fetch_overdue: boolean;
   source: string;
   applied: boolean;
   applied_at: string | null;

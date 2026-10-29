@@ -22,6 +22,7 @@ function protection(overrides: Partial<Protection> = {}): Protection {
     updated_at: 1788381900,
     built_at: 1788381900,
     fetched_at: 1788399072,
+    fetch_overdue: false,
     source: 'Emerging Threats Open',
     applied: true,
     applied_at: '2026-08-22T08:05:00+00:00',
@@ -90,6 +91,19 @@ describe('ProtectionView', () => {
       const meta = host.querySelector('.sig-meta')?.textContent ?? '';
       expect(meta).toContain('Rebuilt');
       expect(meta).toContain(formatDateTime(1788381900));
+    });
+
+    it('says when the daily refresh has stopped arriving', () => {
+      // Fifteen failed nights read exactly like fifteen nights with nothing
+      // new: a download date and no other word on the screen.
+      const host = build(protection({ fetch_overdue: true }));
+      const line = host.querySelector('.sig-failed')?.textContent ?? '';
+      expect(line).toContain(formatDateTime(1788399072));
+      expect(line).toContain('internet');
+    });
+
+    it('says nothing while the refresh is fine', () => {
+      expect(build().querySelector('.sig-failed')).toBeNull();
     });
   });
 
